@@ -1,0 +1,18 @@
+diff --git a/calculator/hidden_error_test.go b/calculator/hidden_error_test.go
+new file mode 100644
+index 0000000..060d2b9
+--- /dev/null
++++ b/calculator/hidden_error_test.go
+@@ -0,0 +1,12 @@
++package calculator
++
++import (
++	"errors"
++	"testing"
++)
++
++func TestEvalDivideByZeroHidden(t *testing.T) {
++	if _, err := Eval("7/(3-3)"); !errors.Is(err, ErrDivideByZero) {
++		t.Fatalf("err = %v, want ErrDivideByZero", err)
++	}
++}

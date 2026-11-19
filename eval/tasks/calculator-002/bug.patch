@@ -1,0 +1,13 @@
+diff --git a/calculator/calculator.go b/calculator/calculator.go
+index 46da854..d7e8f2b 100644
+--- a/calculator/calculator.go
++++ b/calculator/calculator.go
+@@ -76,7 +76,7 @@ func (p *parser) parseProduct() (int, error) {
+ 			continue
+ 		}
+ 		if right == 0 {
+-			return 0, ErrDivideByZero
++			return 0, nil
+ 		}
+ 		value /= right
+ 	}

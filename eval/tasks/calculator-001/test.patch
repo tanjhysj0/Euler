@@ -1,0 +1,27 @@
+diff --git a/calculator/hidden_precedence_test.go b/calculator/hidden_precedence_test.go
+new file mode 100644
+index 0000000..2b5398d
+--- /dev/null
++++ b/calculator/hidden_precedence_test.go
+@@ -0,0 +1,21 @@
++package calculator
++
++import "testing"
++
++func TestEvalPrecedenceMixed(t *testing.T) {
++	cases := map[string]int{
++		"1+2*3":   7,
++		"10-6/2":  7,
++		"2*3+4*5": 26,
++		"8/4/2":   1,
++	}
++	for expr, want := range cases {
++		got, err := Eval(expr)
++		if err != nil {
++			t.Fatalf("Eval(%q): %v", expr, err)
++		}
++		if got != want {
++			t.Fatalf("Eval(%q) = %d, want %d", expr, got, want)
++		}
++	}
++}
