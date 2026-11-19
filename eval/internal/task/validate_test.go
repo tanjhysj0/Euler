@@ -1,8 +1,10 @@
 package task
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -51,7 +53,32 @@ func TestValidatePatchesRejectsMissingFile(t *testing.T) {
 	if err := os.Remove(value.GoldPatch()); err != nil {
 		t.Fatalf("删除 gold: %v", err)
 	}
-	if err := ValidatePatches(value, fixture, t.TempDir()); err == nil {
-		t.Fatal("缺失补丁必须报错")
+	err := ValidatePatches(value, fixture, t.TempDir())
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("缺失补丁必须返回 ErrInvalid，实际: %v", err)
+	}
+	if !strings.Contains(err.Error(), "gold.patch") {
+		t.Fatalf("错误信息应包含 gold.patch，实际: %v", err)
+	}
+}
+
+func TestValidatePatchesSuccess(t *testing.T) {
+	dir := t.TempDir()
+	fixture := preparePatches(t, dir)
+	value := Task{
+		ID: "demo-001", Issue: "x",
+		FailToPass: []string{"TestA"}, PassToPass: []string{"TestB"},
+		Dir: filepath.Join(dir, "tasks", "demo-001"),
+	}.WithDefaults()
+	workRoot := t.TempDir()
+	if err := ValidatePatches(value, fixture, workRoot); err != nil {
+		t.Fatalf("合法补丁必须通过: %v", err)
+	}
+	entries, err := os.ReadDir(workRoot)
+	if err != nil {
+		t.Fatalf("读取工作根目录: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("校验后不应有残留目录，实际 %d 项", len(entries))
 	}
 }
