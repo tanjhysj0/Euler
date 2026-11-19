@@ -1,8 +1,10 @@
 package task
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -48,8 +50,9 @@ func TestValidateBasicRejectsOverlap(t *testing.T) {
 		PassToPass: []string{"TestA"},
 	}
 	task.Dir = filepath.Join("tasks", "demo-001")
-	if err := task.WithDefaults().ValidateBasic(); err == nil {
-		t.Fatal("F2P 与 P2P 重叠必须报错")
+	err := task.WithDefaults().ValidateBasic()
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("F2P 与 P2P 重叠必须返回 ErrInvalid，实际: %v", err)
 	}
 }
 
@@ -57,5 +60,42 @@ func TestFilterReportsMissingID(t *testing.T) {
 	_, err := Filter([]Task{{ID: "a"}}, []string{"a", "b"})
 	if err == nil {
 		t.Fatal("缺失题目 ID 必须报错")
+	}
+}
+
+func TestLoadRejectsDuplicateID(t *testing.T) {
+	root := t.TempDir()
+	body := `{
+		"id": "demo-001",
+		"title": "示例",
+		"issue": "修复示例",
+		"fail_to_pass": ["TestA"],
+		"pass_to_pass": ["TestB"]
+	}`
+	writeTask(t, root, "demo-001", body)
+	writeTask(t, root, "demo-001-copy", body)
+	if _, err := Load(root); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("重复 id 必须返回 ErrInvalid，实际: %v", err)
+	}
+}
+
+func TestLoadReturnsAbsoluteDir(t *testing.T) {
+	root := t.TempDir()
+	writeTask(t, root, "demo-001", `{
+		"id": "demo-001",
+		"title": "示例",
+		"issue": "修复示例",
+		"fail_to_pass": ["TestA"],
+		"pass_to_pass": ["TestB"]
+	}`)
+	tasks, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !filepath.IsAbs(tasks[0].Dir) {
+		t.Fatalf("Dir 不是绝对路径: %s", tasks[0].Dir)
+	}
+	if !strings.HasPrefix(tasks[0].BugPatch(), tasks[0].Dir) {
+		t.Fatalf("BugPatch 未以 Dir 开头: %s", tasks[0].BugPatch())
 	}
 }

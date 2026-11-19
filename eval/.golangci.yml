@@ -1,0 +1,43 @@
+# euleval — 独立 module 的 golangci-lint 配置。
+version: "2"
+
+run:
+  timeout: 5m
+  allow-parallel-runners: true
+  issues-exit-code: 1
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - revive
+    - lll
+    - misspell
+    - nolintlint
+    - usestdlibvars
+
+  settings:
+    lll:
+      line-length: 100
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+        - name: package-comments
+          disabled: true
+
+  exclusions:
+    rules:
+      # 测试里大量内联 JSON 与断言，行宽不宜强制。
+      - path: _test\.go
+        linters:
+          - lll
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

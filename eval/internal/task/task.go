@@ -34,7 +34,7 @@ type Task struct {
 	TestCommand    string   `json:"test_command,omitempty"`
 	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
 
-	// Dir 是题目目录的绝对路径，不参与 JSON 序列化。
+	// Dir 是题目目录的绝对路径（由 Load 填充），不参与 JSON 序列化。
 	Dir string `json:"-"`
 }
 
@@ -56,20 +56,32 @@ func Load(root string) ([]Task, error) {
 		}
 		tasks = append(tasks, task.WithDefaults())
 	}
+	dirByID := make(map[string]string, len(tasks))
+	for _, item := range tasks {
+		if prev, ok := dirByID[item.ID]; ok {
+			return nil, fmt.Errorf("%w: id %s 重复: %s 与 %s", ErrInvalid, item.ID, prev, item.Dir)
+		}
+		dirByID[item.ID] = item.Dir
+	}
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })
 	return tasks, nil
 }
 
 func loadOne(dir string) (Task, error) {
-	data, err := os.ReadFile(filepath.Join(dir, taskFileName))
+	// 题库目录由调用方提供，属于受信输入，此处忽略 G304 文件包含告警。
+	data, err := os.ReadFile(filepath.Join(dir, taskFileName)) //nolint:gosec // 受信题库目录
 	if err != nil {
 		return Task{}, fmt.Errorf("读取 %s: %w", dir, err)
 	}
 	var value Task
 	if err = json.Unmarshal(data, &value); err != nil {
-		return Task{}, fmt.Errorf("%w: %s: %v", ErrInvalid, dir, err)
+		return Task{}, fmt.Errorf("%w: %s: %w", ErrInvalid, dir, err)
 	}
-	value.Dir = dir
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return Task{}, fmt.Errorf("解析 %s 绝对路径: %w", dir, err)
+	}
+	value.Dir = absDir
 	return value, nil
 }
 
