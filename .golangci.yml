@@ -626,10 +626,17 @@ linters:
         - name: var-naming
           disabled: true
 
-        # exported — 约束：导出符号必须以符号名起头写 godoc。
-        #          关闭：中文导出符号的 godoc 格式由项目约定保障。
+        # exported — 约束：导出符号（函数 / 类型 / 常量 / 变量）必须有 godoc 注释。
+        #          arguments：
+        #            disableStutteringCheck — 豁免「注释必须以符号名起头」的格式
+        #              检查（中文注释不以英文标识符开头，只查注释存在性）；
+        #            checkPrivateReceivers — 未导出类型的导出方法也纳入检查。
+        #          注：struct 字段与未导出函数不在本规则覆盖范围（revive 无此能力）。
         - name: exported
-          disabled: true
+          arguments:
+            - disableStutteringCheck
+            - checkPrivateReceivers
+          severity: warning
 
         # package-comments — 约束：每个包至少一个 godoc。
         #                  关闭：单文件包注释不在每个子包强制。
@@ -794,7 +801,12 @@ linters:
         - name: string-of-int
           severity: warning
 
-        # string-format — 约束：strings.HasPrefix / Trim / Index 等应走 strings 包。
+        # string-format — 约束：指定函数调用的字符串字面量参数必须匹配正则。
+        #               注：本规则只查函数调用的字符串实参（scope 是函数名，
+        #                   如 fmt.Errorf[0]），不查注释——revive 及 golangci-lint
+        #                   v2.12.2 全部内置 linter 均无法强制「注释必须中文」，
+        #                   该需求只能由自定义 go/analysis 检查器实现。
+        #                   当前无具体字面量格式约束，保持默认（不检查）。
         - name: string-format
           severity: warning
 

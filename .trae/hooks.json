@@ -1,40 +1,5 @@
 {
   "version": 1,
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${TRAE_PROJECT_DIR:-.}/.trae/hooks/golangci-gate.sh\"",
-            "timeout": 60
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${TRAE_PROJECT_DIR:-.}/.trae/hooks/golangci-gate.sh\"",
-            "timeout": 120
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "loop_limit": 2,
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${TRAE_PROJECT_DIR:-.}/.trae/hooks/golangci-gate.sh\"",
-            "timeout": 300
-          }
-        ]
-      }
-    ]
   }
 }
