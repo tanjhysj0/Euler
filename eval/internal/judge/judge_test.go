@@ -107,6 +107,55 @@ func TestRunRejectsEmptyPatch(t *testing.T) {
 	}
 }
 
+// TestRunRejectsEmptyExpectations 验证期望列表为空时拒绝判分，避免 fail-open。
+func TestRunRejectsEmptyExpectations(t *testing.T) {
+	cases := map[string]task.Task{
+		"缺少 F2P": {ID: "demo-001", PassToPass: []string{"TestAddZero"}},
+		"缺少 P2P": {ID: "demo-001", FailToPass: []string{"TestAddHidden"}},
+	}
+	for name, item := range cases {
+		result, err := Run(item, "some patch", Options{})
+		if err == nil {
+			t.Fatalf("%s: 期望返回错误", name)
+		}
+		if result.Reason != "invalid_task" {
+			t.Fatalf("%s: reason = %q", name, result.Reason)
+		}
+	}
+}
+
+// TestLimitedBufferTruncates 验证有界缓冲在超过上限后停止保存内容。
+func TestLimitedBufferTruncates(t *testing.T) {
+	buf := limitedBufferWithLimit(8)
+	if _, err := buf.Write([]byte("0123456789abc")); err != nil {
+		t.Fatalf("写入: %v", err)
+	}
+	if !buf.truncated {
+		t.Fatal("应标记截断")
+	}
+	if buf.buf.Len() != 8 {
+		t.Fatalf("长度 = %d, 期望 8", buf.buf.Len())
+	}
+}
+
+// TestEnsureGoTestTimeout 验证 go test 命令的超时参数补齐规则。
+func TestEnsureGoTestTimeout(t *testing.T) {
+	cases := []struct{ name, command, want string }{
+		{"已有超时", "go test -timeout=30s -json ./...", "go test -timeout=30s -json ./..."},
+		{"缺少超时", "go test -count=1 -json ./...", "go test -count=1 -json ./... -timeout=90s"},
+		{"非 go test", "go build ./...", "go build ./..."},
+	}
+	for _, tc := range cases {
+		if got := ensureGoTestTimeout(tc.command, 90*time.Second); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	got := ensureGoTestTimeout("go test ./...", 500*time.Millisecond)
+	if got != "go test ./... -timeout=1s" {
+		t.Errorf("秒数下限: got %q", got)
+	}
+}
+
 // TestRunResolvesGoldAndIgnoresTampering 验证 gold 通过，且篡改可见测试、
 // 新增坏测试文件都无法逃过判分。
 func TestRunResolvesGoldAndIgnoresTampering(t *testing.T) {

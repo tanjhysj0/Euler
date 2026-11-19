@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,7 +20,39 @@ import (
 const (
 	defaultBuildTimeout = 2 * time.Minute
 	defaultTestTimeout  = 5 * time.Minute
+	// maxCapturedOutput 是单次测试命令 stdout 的捕获上限。
+	maxCapturedOutput = 64 << 20
+	// maxCapturedStderr 是单次测试命令 stderr 的捕获上限。
+	maxCapturedStderr = 4 << 10
 )
+
+// limitedBuffer 是有上限的字节缓冲，超出上限后静默丢弃后续写入。
+type limitedBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+// limitedBufferWithLimit 创建指定上限的缓冲。
+func limitedBufferWithLimit(limit int) *limitedBuffer {
+	return &limitedBuffer{limit: limit}
+}
+
+// Write 写入数据；超过上限后仍报告完整写入，但不再保存内容。
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	remaining := b.limit - b.buf.Len()
+	if remaining <= 0 {
+		b.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		b.buf.Write(p[:remaining])
+		b.truncated = true
+		return len(p), nil
+	}
+	b.buf.Write(p)
+	return len(p), nil
+}
 
 // Options 控制判分环境。
 type Options struct {
@@ -43,6 +76,10 @@ type Result struct {
 // Run 执行单题判分。
 func Run(t task.Task, modelPatch string, opts Options) (Result, error) {
 	result := Result{InstanceID: t.ID}
+	if len(t.FailToPass) == 0 || len(t.PassToPass) == 0 {
+		result.Reason = "invalid_task"
+		return result, fmt.Errorf("题目 %s 的 fail_to_pass/pass_to_pass 期望列表不能为空", t.ID)
+	}
 	if strings.TrimSpace(modelPatch) == "" {
 		result.Reason = "no_changes"
 		return result, nil
@@ -118,9 +155,11 @@ func writeTempPatch(id, content string) (string, error) {
 	path := file.Name()
 	if _, err = file.WriteString(content); err != nil {
 		_ = file.Close()
+		_ = os.Remove(path)
 		return "", err
 	}
 	if err = file.Close(); err != nil {
+		_ = os.Remove(path)
 		return "", err
 	}
 	return path, nil
@@ -143,9 +182,27 @@ func runBuild(dir string, timeout time.Duration) (bool, error) {
 	return true, nil
 }
 
+// ensureGoTestTimeout 为缺少 -timeout 的 go test 命令追加包级超时，避免挂起测试残留进程。
+func ensureGoTestTimeout(command string, timeout time.Duration) string {
+	fields := strings.Fields(command)
+	if len(fields) < 2 || fields[0] != "go" || fields[1] != "test" {
+		return command
+	}
+	for _, field := range fields {
+		if field == "-timeout" || strings.HasPrefix(field, "-timeout=") {
+			return command
+		}
+	}
+	seconds := int(timeout / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return command + " -timeout=" + strconv.Itoa(seconds) + "s"
+}
+
 // runTestCommand 执行题目指定的测试命令并返回 stdout。
 func runTestCommand(dir, command string, timeout time.Duration) ([]byte, error) {
-	fields := strings.Fields(command)
+	fields := strings.Fields(ensureGoTestTimeout(command, timeout))
 	if len(fields) == 0 {
 		return nil, fmt.Errorf("test_command 为空")
 	}
@@ -154,15 +211,15 @@ func runTestCommand(dir, command string, timeout time.Duration) ([]byte, error) 
 	//nolint:gosec // 命令来自题库，属于受信输入
 	cmd := exec.CommandContext(ctx, fields[0], fields[1:]...)
 	cmd.Dir = dir
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := limitedBufferWithLimit(maxCapturedOutput)
+	stderr := limitedBufferWithLimit(maxCapturedStderr)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("测试超时: %w", ctx.Err())
 		}
 		// 测试失败本身是正常结果，继续解析输出。
 	}
-	return stdout.Bytes(), nil
+	return stdout.buf.Bytes(), nil
 }
