@@ -1474,17 +1474,17 @@ git -C "$SEED" checkout -- . && git -C "$SEED" clean -fd
 ```json
 {
   "id": "textutil-001",
-  "title": "Split 在空分隔符下 panic",
-  "issue": "调用 textutil.Split(\"a,b\", \"\") 会直接 panic。期望与文档一致：分隔符为空时按 UTF-8 字符逐个切分，输入为空时返回 nil。请修复，并保持其他切分与 Join 行为不变。",
+  "title": "Split 在空分隔符下按字节切分",
+  "issue": "调用 textutil.Split(\"中文\", \"\") 返回了乱码片段，而文档承诺按字符切分。请修复空分隔符分支，使中文与 ASCII 都按 UTF-8 字符切分，并保持其他切分与 Join 行为不变。",
   "difficulty": "easy",
-  "tags": ["edge-case", "panic"],
+  "tags": ["edge-case", "unicode"],
   "protected_tests": ["textutil/textutil_test.go"],
-  "fail_to_pass": ["TestSplitEmptySep", "TestSplitEmptySepUnicode"],
+  "fail_to_pass": ["TestSplitEmptySepUnicode"],
   "pass_to_pass": ["TestSplitBasic", "TestSplitEmptyInput", "TestJoin"]
 }
 ```
 
-buggy 编辑（[textutil.go](file:///Users/jason/go/src/Euler/eval/fixture/textutil/textutil.go) 的 `Split` 整体替换为）：
+buggy 编辑（[textutil.go](file:///Users/jason/go/src/Euler/eval/fixture/textutil/textutil.go) 的 `Split` 整体替换为按字节切分的版本）：
 
 ```go
 // Split 按 sep 切分 s。
@@ -1492,11 +1492,20 @@ func Split(s, sep string) []string {
 	if s == "" {
 		return nil
 	}
+	if sep == "" {
+		out := make([]string, 0, len(s))
+		for i := 0; i < len(s); i++ {
+			out = append(out, s[i:i+1])
+		}
+		return out
+	}
 	return strings.Split(s, sep)
 }
 ```
 
-gold 修复：恢复为 fixture 原实现（`sep == ""` 分支 + `splitRunes`）。
+这样 ASCII 仍能被切成单字符（`TestSplitEmptySep` 在基线即可通过，不作为 F2P），而中文会被切成 4 个无效 UTF-8 字节片段，`TestSplitEmptySepUnicode` 在基线失败。
+
+gold 修复：恢复为 fixture 原实现（`sep == ""` 分支调用 `splitRunes`）。
 
 `test.patch` 新增 `textutil/hidden_split_test.go`：
 
@@ -2236,6 +2245,7 @@ func summarizeTests(specs []string, outcomes testOutcomes) report.TestSummary {
 package judge
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -2378,6 +2388,50 @@ func TestRunResolvesGoldAndIgnoresTampering(t *testing.T) {
 		}
 		if !result.Resolved {
 			t.Fatalf("%s: result = %+v", name, result)
+		}
+	}
+}
+
+// TestRepoBaselineSemantics 用真实题库守住出题质量：每个 F2P 必须在
+// buggy 基线上失败，每个 P2P 必须通过，否则题目无效。
+func TestRepoBaselineSemantics(t *testing.T) {
+	tasksDir := filepath.Join("..", "..", "tasks")
+	fixtureDir := filepath.Join("..", "..", "fixture")
+	items, err := task.Load(tasksDir)
+	if os.IsNotExist(err) {
+		t.Skip("题库尚未生成")
+	}
+	if err != nil {
+		t.Fatalf("加载题库: %v", err)
+	}
+	workRoot := t.TempDir()
+	for _, item := range items {
+		if err = item.ValidateBasic(); err != nil {
+			t.Fatalf("%s: %v", item.ID, err)
+		}
+		repo, err := workspace.Materialize(
+			fixtureDir, filepath.Join(workRoot, "base-"+item.ID), item.BugPatch())
+		if err != nil {
+			t.Fatalf("%s: 物化基线: %v", item.ID, err)
+		}
+		if err = repo.ApplyFile(item.TestPatch()); err != nil {
+			t.Fatalf("%s: 应用隐藏测试: %v", item.ID, err)
+		}
+		output, err := runTestCommand(repo.Dir, item.TestCommand, 2*time.Minute)
+		if err != nil {
+			t.Fatalf("%s: 运行测试: %v", item.ID, err)
+		}
+		outcomes := parseTestOutput(bytes.NewReader(output))
+		for _, spec := range item.FailToPass {
+			if status, ok := outcomes.lookup(spec); ok && status == "pass" {
+				t.Errorf("%s: F2P %s 在 buggy 基线已通过，题目无效", item.ID, spec)
+			}
+		}
+		for _, spec := range item.PassToPass {
+			if status, ok := outcomes.lookup(spec); !ok || status != "pass" {
+				t.Errorf("%s: P2P %s 在 buggy 基线未通过（status=%q, ok=%v）",
+					item.ID, spec, status, ok)
+			}
 		}
 	}
 }
