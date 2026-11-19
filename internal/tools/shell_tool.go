@@ -15,7 +15,7 @@ type shellInput struct {
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"description=可选的命令超时秒数"`
 }
 
-// shellToolset binds the shell tool to one executor and workspace directory.
+// shellToolset 将 shell 工具绑定到单个执行器和工作区目录。
 type shellToolset struct {
 	registry *Registry
 	executor *Shell
@@ -30,8 +30,7 @@ func (r *Registry) shellTool(
 	return registerTool(r, "shell", "在工作区执行 shell 命令（需用户批准）", set.run)
 }
 
-// run only prepares the guarded call; execution happens in apply after the
-// approval gate grants it.
+// run 只准备受审批保护的调用；实际执行发生在审批关卡放行后的 apply 中。
 func (s shellToolset) run(_ context.Context, input shellInput) (toolOutcome, error) {
 	request := ShellRequest{
 		Dir: s.dir, Command: input.Command,

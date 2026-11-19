@@ -12,42 +12,41 @@ import (
 )
 
 const (
-	// codeInvalidRequest marks an unparsable approval id or decision body.
+	// codeInvalidRequest 表示无法解析的审批 id 或决策请求体。
 	codeInvalidRequest = "invalid_request"
-	// codeMissingApproved marks a decision body without the approved field.
+	// codeMissingApproved 表示决策请求体缺少 approved 字段。
 	codeMissingApproved = "missing_approved"
-	// codeNotFound marks an unknown approval id.
+	// codeNotFound 表示未知的审批 id。
 	codeNotFound = "not_found"
-	// codeAlreadyDecided marks the second decision for one approval.
+	// codeAlreadyDecided 表示对同一审批的第二次决策。
 	codeAlreadyDecided = "approval_already_decided"
-	// codeInternalError marks an unexpected storage failure.
+	// codeInternalError 表示意外的存储故障。
 	codeInternalError = "internal_error"
 
-	// fieldApproved is the decision outcome field of the request body.
+	// fieldApproved 是请求体中的决策结果字段。
 	fieldApproved = "approved"
 )
 
-// Handler serves the approval decision endpoint.
+// Handler 提供审批决策端点。
 type Handler struct{ service *Service }
 
-// NewHandler builds the approval handler over one service.
+// NewHandler 基于一个服务构建审批处理器。
 func NewHandler(service *Service) *Handler { return &Handler{service: service} }
 
-// Register mounts the approval routes on an authenticated API group.
+// Register 将审批路由挂载到已鉴权的 API 分组上。
 func (h *Handler) Register(group *gin.RouterGroup) {
 	group.POST("/approvals/:id/decision", h.decide)
 }
 
-// decisionRequest is the body of POST /approvals/{id}/decision. Approved is a
-// pointer so an omitted field is a client error instead of a silent rejection.
+// decisionRequest 是 POST /approvals/{id}/decision 的请求体。Approved 是
+// 指针，使省略该字段成为客户端错误，而不是被静默当作拒绝。
 type decisionRequest struct {
 	Approved *bool  `json:"approved"`
 	Reason   string `json:"reason"`
 }
 
-// decide records one decision. The write uses a detached context so a client
-// that disconnects while the UI submits the decision cannot leave the approval
-// pending forever.
+// decide 记录一次决策。写入使用脱离请求的 context，因此客户端在
+// UI 提交决策时断开连接，不会让审批永远停留在 pending 状态。
 func (h *Handler) decide(c *gin.Context) {
 	id, ok := parseApprovalID(c)
 	if !ok {
@@ -96,7 +95,7 @@ func parseDecision(c *gin.Context) (decisionRequest, bool) {
 	return body, true
 }
 
-// abortDecision maps approval errors onto the unified error envelope.
+// abortDecision 将审批错误映射为统一的错误响应结构。
 func abortDecision(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrAlreadyDecided):

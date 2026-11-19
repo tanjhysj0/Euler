@@ -8,26 +8,26 @@ import (
 
 const keyringService = "Euler"
 
-// ErrSecretNotFound reports that no secret is stored for a reference.
+// ErrSecretNotFound 表示某个引用没有存储对应的密钥。
 var ErrSecretNotFound = errors.New("secret not found")
 
-// SecretStore reads and writes API keys outside the database.
+// SecretStore 在数据库之外读写 API key。
 type SecretStore interface {
 	Set(service, value string) error
 	Get(service string) (string, error)
 	Delete(service string) error
 }
 
-// KeychainStore stores secrets in the macOS Keychain under the service name
-// "Euler" and the caller provided reference.
+// KeychainStore 以服务名 "Euler" 和调用方提供的引用，
+// 将密钥存储在 macOS Keychain 中。
 type KeychainStore struct{}
 
-// Set writes value for service to the Keychain.
+// Set 将 service 对应的 value 写入 Keychain。
 func (KeychainStore) Set(service, value string) error {
 	return keyring.Set(keyringService, service, value)
 }
 
-// Get reads the secret stored for service from the Keychain.
+// Get 从 Keychain 读取为 service 存储的密钥。
 func (KeychainStore) Get(service string) (string, error) {
 	value, err := keyring.Get(keyringService, service)
 	if errors.Is(err, keyring.ErrNotFound) {
@@ -36,7 +36,7 @@ func (KeychainStore) Get(service string) (string, error) {
 	return value, err
 }
 
-// Delete removes the Keychain entry for service.
+// Delete 删除 service 对应的 Keychain 条目。
 func (KeychainStore) Delete(service string) error {
 	return keyring.Delete(keyringService, service)
 }

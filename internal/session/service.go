@@ -1,5 +1,4 @@
-// Package session owns session lifecycle, workspace binding and message
-// history.
+// Package session 负责会话生命周期、工作区绑定和消息历史。
 package session
 
 import (
@@ -29,41 +28,41 @@ const (
 )
 
 var (
-	// ErrInvalidInput marks session input that cannot be accepted.
+	// ErrInvalidInput 表示无法接受的会话输入。
 	ErrInvalidInput = errors.New("invalid session input")
-	// ErrNotFound marks a session that does not exist.
+	// ErrNotFound 表示会话不存在。
 	ErrNotFound = errors.New("session not found")
 
 	activeRunStatuses = []string{"queued", "running", "waiting_approval"}
 )
 
-// CreateInput carries the fields accepted by Create. An empty Path asks the
-// service to create a default workspace directory.
+// CreateInput 承载 Create 接受的字段。Path 为空时，
+// 服务会创建一个默认的工作区目录。
 type CreateInput struct {
 	ProfileID uuid.UUID
 	Path      string
 }
 
-// ListFilter narrows session listings.
+// ListFilter 用于收窄会话列表的查询范围。
 type ListFilter struct {
 	WorkspacePath string
 	Query         string
 	ActiveRun     bool
 }
 
-// Service manages sessions and their message history.
+// Service 管理会话及其消息历史。
 type Service struct {
 	db         *gorm.DB
 	workspaces *workspace.Service
 }
 
-// NewService builds a Service over db and the workspace directory helper.
+// NewService 基于 db 和工作区目录辅助服务构建 Service。
 func NewService(db *gorm.DB, workspaces *workspace.Service) *Service {
 	return &Service{db: db, workspaces: workspaces}
 }
 
-// Create prepares a workspace directory, stores the session and reports
-// whether another session on the same path has an active run.
+// Create 准备工作区目录、存储会话，并报告同一路径上的其他会话
+// 是否有活跃的 run。
 func (s *Service) Create(ctx context.Context, input CreateInput) (CreateResult, error) {
 	sessionID := uuid.New()
 	path, created, err := s.preparePath(sessionID, input.Path)
@@ -80,7 +79,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (CreateResult, 
 	return CreateResult{}, err
 }
 
-// Get returns one session with its workspace and model summary.
+// Get 返回一个会话及其工作区和模型摘要。
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (SessionView, error) {
 	var session persistence.Session
 	err := s.db.WithContext(ctx).First(&session, idFilter, id).Error
@@ -103,7 +102,7 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (SessionView, error) {
 	return toSessionView(session, workspaceRow, profile), nil
 }
 
-// List returns sessions ordered by most recent activity.
+// List 返回按最近活跃时间排序的会话。
 func (s *Service) List(ctx context.Context, filter ListFilter) ([]SessionView, error) {
 	query, err := s.listQuery(ctx, filter)
 	if err != nil {
@@ -120,7 +119,7 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]SessionView, e
 	return views, nil
 }
 
-// Messages returns a page of messages ordered by session sequence.
+// Messages 返回按会话序号排序的一页消息。
 func (s *Service) Messages(
 	ctx context.Context, id uuid.UUID, after int64, limit int,
 ) (MessagePage, error) {
@@ -318,8 +317,8 @@ func loadProfile(tx *gorm.DB, id uuid.UUID) (persistence.ModelProfile, error) {
 }
 
 func lockWorkspacePath(tx *gorm.DB, path string) error {
-	// hashed keys may collide across paths, which only serializes unrelated
-	// creates and never weakens correctness.
+	// 不同路径的哈希键可能碰撞，这只会让不相关的创建操作被串行化，
+	// 绝不会削弱正确性。
 	err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", path).Error
 	if err != nil {
 		return fmt.Errorf("lock workspace path: %w", err)

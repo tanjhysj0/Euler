@@ -19,19 +19,19 @@ const (
 	codeActiveRunExists = "active_run_exists"
 )
 
-// Handler exposes the run HTTP endpoints.
+// Handler 暴露 run 相关的 HTTP 端点。
 type Handler struct {
 	manager *Manager
 	store   *Store
 	events  event.Publisher
 }
 
-// NewHandler builds a Handler backed by manager, store and events.
+// NewHandler 构建一个由 manager、store 和 events 支撑的 Handler。
 func NewHandler(manager *Manager, store *Store, events event.Publisher) *Handler {
 	return &Handler{manager: manager, store: store, events: events}
 }
 
-// Register mounts the run routes on an authenticated API group.
+// Register 将 run 路由挂载到已通过鉴权的 API 分组上。
 func (h *Handler) Register(group *gin.RouterGroup) {
 	group.POST("/sessions/:id/runs", h.start)
 	group.GET("/runs/:id", h.get)
@@ -81,7 +81,7 @@ func (h *Handler) cancel(c *gin.Context) {
 	if !ok {
 		return
 	}
-	// State and its event must survive a client disconnect after the request.
+	// 状态及其事件必须在请求之后客户端断开连接时仍能落库。
 	ctx := context.WithoutCancel(c.Request.Context())
 	if err := h.manager.Cancel(ctx, runID); err != nil {
 		abortRunError(c, err, "停止 Run 失败")

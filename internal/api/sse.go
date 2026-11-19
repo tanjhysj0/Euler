@@ -25,12 +25,12 @@ const (
 	sseIntBits        = 64
 )
 
-// RunFinder reports whether a run exists.
+// RunFinder 报告某个 run 是否存在。
 type RunFinder interface {
 	Exists(ctx context.Context, runID uuid.UUID) (bool, error)
 }
 
-// SSEHandler streams a run's persisted events and then its live events.
+// SSEHandler 先流式发送 run 的已持久化事件，再发送实时事件。
 func SSEHandler(store event.Publisher, finder RunFinder) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		runID, ok := parseSSERunID(c)
@@ -61,8 +61,8 @@ func SSEHandler(store event.Publisher, finder RunFinder) gin.HandlerFunc {
 	}
 }
 
-// orderedStream emits persisted and live events in sequence order, filling
-// gaps from the store and dropping live events already sent.
+// orderedStream 按序号顺序发送已持久化事件和实时事件，从存储补齐缺口，
+// 并丢弃已发送过的实时事件。
 type orderedStream struct {
 	listAfter func(ctx context.Context, after int64) ([]event.Event, error)
 	live      <-chan event.Event

@@ -1,5 +1,5 @@
-// Package modelprofile manages OpenAI compatible model configuration and keeps
-// API keys in the Keychain or in environment variables.
+// Package modelprofile 管理兼容 OpenAI 的模型配置，并将 API key
+// 保存在 Keychain 或环境变量中。
 package modelprofile
 
 import (
@@ -16,26 +16,26 @@ import (
 )
 
 const (
-	// SecretKindKeychain stores the API key in the macOS Keychain.
+	// SecretKindKeychain 将 API key 存储在 macOS Keychain 中。
 	SecretKindKeychain = "keychain"
-	// SecretKindEnvironment reads the API key from an environment variable.
+	// SecretKindEnvironment 从环境变量读取 API key。
 	SecretKindEnvironment = "environment"
 	emptySecret           = ""
 )
 
 var (
-	// ErrInvalidInput marks a model profile request that cannot be accepted.
+	// ErrInvalidInput 标记无法被接受的模型配置请求。
 	ErrInvalidInput = errors.New("invalid model profile input")
-	// ErrSecretRefInUse marks a keychain reference that already stores a key.
+	// ErrSecretRefInUse 标记已经存有密钥的 keychain 引用。
 	ErrSecretRefInUse = fmt.Errorf("%w: keychain reference already in use", ErrInvalidInput)
-	// ErrSecretUnavailable marks a secret that cannot be read or written.
+	// ErrSecretUnavailable 标记无法读取或写入的密钥。
 	ErrSecretUnavailable = errors.New("model profile secret unavailable")
 
 	environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
-// CreateInput carries the fields accepted by Create. APIKey is write-only and
-// is never part of a stored row or a response.
+// CreateInput 承载 Create 接受的字段。APIKey 只用于写入，
+// 绝不会出现在存储的记录行或响应中。
 type CreateInput struct {
 	Name       string
 	BaseURL    string
@@ -45,7 +45,7 @@ type CreateInput struct {
 	APIKey     string
 }
 
-// Profile is the API representation of a model profile without its API key.
+// Profile 是模型配置的 API 表示形式，不包含其 API key。
 type Profile struct {
 	ID         uuid.UUID `json:"id"`
 	Name       string    `json:"name"`
@@ -55,7 +55,7 @@ type Profile struct {
 	SecretRef  string    `json:"secret_ref"`
 }
 
-// ResolvedProfile is a model profile together with its API key for one call.
+// ResolvedProfile 是模型配置连同其 API key，供单次调用使用。
 type ResolvedProfile struct {
 	ID      uuid.UUID
 	BaseURL string
@@ -63,13 +63,13 @@ type ResolvedProfile struct {
 	APIKey  string
 }
 
-// Resolver supplies model profiles to agent and shell tooling.
+// Resolver 向 agent 和 shell 工具提供模型配置。
 type Resolver interface {
 	Resolve(ctx context.Context, id uuid.UUID) (ResolvedProfile, error)
 	EnvironmentSecretNames(ctx context.Context) ([]string, error)
 }
 
-// Service implements model profile management and Resolver.
+// Service 实现模型配置管理和 Resolver。
 type Service struct {
 	repo    Repository
 	secrets SecretStore
@@ -77,13 +77,13 @@ type Service struct {
 
 var _ Resolver = (*Service)(nil)
 
-// NewService builds a Service over the given repository and secret store.
+// NewService 基于给定的仓库和密钥存储构建 Service。
 func NewService(repo Repository, secrets SecretStore) *Service {
 	return &Service{repo: repo, secrets: secrets}
 }
 
-// Create validates input, writes keychain secrets before the row and removes
-// the secret again when the row cannot be saved.
+// Create 校验输入，在写入记录行之前先写入 keychain 密钥，
+// 当记录行无法保存时会再次删除该密钥。
 func (s *Service) Create(ctx context.Context, input CreateInput) (Profile, error) {
 	normalized, err := normalizeCreateInput(input)
 	if err != nil {
@@ -112,7 +112,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Profile, error
 	return toProfile(row), nil
 }
 
-// List returns every model profile without API keys.
+// List 返回所有模型配置，不包含 API key。
 func (s *Service) List(ctx context.Context) ([]Profile, error) {
 	rows, err := s.repo.List(ctx)
 	if err != nil {
@@ -125,8 +125,8 @@ func (s *Service) List(ctx context.Context) ([]Profile, error) {
 	return profiles, nil
 }
 
-// Resolve loads a profile and reads its API key from the configured secret
-// source. The key only exists in the returned value.
+// Resolve 加载模型配置，并从配置的密钥来源读取其 API key。
+// 该 key 只存在于返回值中。
 func (s *Service) Resolve(ctx context.Context, id uuid.UUID) (ResolvedProfile, error) {
 	row, err := s.repo.Get(ctx, id)
 	if err != nil {
@@ -144,8 +144,8 @@ func (s *Service) Resolve(ctx context.Context, id uuid.UUID) (ResolvedProfile, e
 	}, nil
 }
 
-// EnvironmentSecretNames lists unique environment variables referenced by
-// environment backed profiles so shells can strip them from child processes.
+// EnvironmentSecretNames 列出环境变量型模型配置引用的去重环境变量名，
+// 以便 shell 从子进程中剔除这些变量。
 func (s *Service) EnvironmentSecretNames(ctx context.Context) ([]string, error) {
 	rows, err := s.repo.List(ctx)
 	if err != nil {

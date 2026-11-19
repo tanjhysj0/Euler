@@ -308,8 +308,8 @@ func openToolsTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// deleteToolsFixtures removes only rows owned by one fixture workspace, in
-// foreign-key order, never truncating shared tables.
+// deleteToolsFixtures 只按外键顺序删除单个 fixture 工作区拥有的行，
+// 绝不截断共享表。
 func deleteToolsFixtures(t *testing.T, db *gorm.DB, workspaceID, profileID uuid.UUID) {
 	t.Helper()
 	var sessionIDs []uuid.UUID

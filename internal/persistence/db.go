@@ -1,4 +1,4 @@
-// Package persistence owns the PostgreSQL schema, entities and connection setup.
+// Package persistence 负责 PostgreSQL 的 schema、实体和连接建立。
 package persistence
 
 import (
@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres" // registers the postgres driver
-	_ "github.com/golang-migrate/migrate/v4/source/file"       // registers the file source
+	_ "github.com/golang-migrate/migrate/v4/database/postgres" // 注册 postgres 驱动
+	_ "github.com/golang-migrate/migrate/v4/source/file"       // 注册 file 源
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -24,7 +24,7 @@ const (
 	connMaxLifetime = 30 * time.Minute
 )
 
-// Open connects GORM to PostgreSQL, configures the pool and verifies liveness.
+// Open 将 GORM 连接到 PostgreSQL，配置连接池并验证连通性。
 func Open(ctx context.Context, databaseURL string) (*gorm.DB, error) {
 	db, err := gorm.Open(postgres.Open(databaseURL), &gorm.Config{
 		Logger:         logger.Default.LogMode(logger.Silent),
@@ -46,7 +46,7 @@ func Open(ctx context.Context, databaseURL string) (*gorm.DB, error) {
 	return db, nil
 }
 
-// Migrate applies all pending migrations found in the migrations directory.
+// Migrate 应用 migrations 目录中所有待执行的 migration。
 func Migrate(databaseURL string) error {
 	dir, err := migrationsDir()
 	if err != nil {
@@ -68,9 +68,9 @@ func Migrate(databaseURL string) error {
 	return nil
 }
 
-// migrationsDir locates the migrations directory: the working directory
-// first (repository checkout and tests), then next to or above the running
-// executable so an installed binary also finds its migrations.
+// migrationsDir 定位 migrations 目录：先查找工作目录
+// （仓库检出和测试场景），再查找正在运行的可执行文件旁边或其上级目录，
+// 使安装后的二进制也能找到它的 migrations。
 func migrationsDir() (string, error) {
 	candidates := []string{"migrations"}
 	if exe, err := os.Executable(); err == nil {
@@ -91,12 +91,12 @@ func migrationsDir() (string, error) {
 	return "", errors.New("migrations directory not found")
 }
 
-// HealthChecker adapts a GORM connection to the API health endpoint.
+// HealthChecker 将 GORM 连接适配到 API 健康检查端点。
 type HealthChecker struct {
 	DB *gorm.DB
 }
 
-// Ping reports whether the underlying connection pool answers a ping.
+// Ping 报告底层连接池是否能响应 ping。
 func (h HealthChecker) Ping(ctx context.Context) error {
 	sqlDB, err := h.DB.DB()
 	if err != nil {

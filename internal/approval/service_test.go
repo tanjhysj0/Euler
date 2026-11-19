@@ -13,8 +13,8 @@ import (
 	"euler/internal/event"
 )
 
-// fakeStore is an in-memory Store with the same first-decision-wins contract
-// as DBStore, so service tests exercise waiting without a database.
+// fakeStore 是内存版 Store，遵循与 DBStore 相同的“首次决策生效”约定，
+// 使服务测试无需数据库即可验证等待逻辑。
 type fakeStore struct {
 	mu         sync.Mutex
 	records    map[uuid.UUID]Record
@@ -92,7 +92,7 @@ func (f *fakeStore) pendingFor(toolCallID uuid.UUID) (uuid.UUID, bool) {
 	return uuid.Nil, false
 }
 
-// fakeBroadcaster records every published event in order.
+// fakeBroadcaster 按顺序记录每个已发布的事件。
 type fakeBroadcaster struct {
 	mu     sync.Mutex
 	events []event.Event
@@ -143,8 +143,8 @@ func (f *serviceFixture) request() Request {
 	}
 }
 
-// waitForPendingApproval polls the repository until Require persisted the
-// pending row, then returns its real id. Assertions stay in the test goroutine.
+// waitForPendingApproval 轮询存储，直到 Require 持久化了 pending 行，
+// 然后返回其真实 id。断言保留在测试 goroutine 中执行。
 func (f *serviceFixture) waitForPendingApproval(t *testing.T) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
@@ -225,8 +225,8 @@ func TestApprovalCancelReturnsDecisionThatWonRace(t *testing.T) {
 	defer cancel()
 	result := fixture.startRequire(ctx)
 	approvalID := fixture.waitForPendingApproval(t)
-	// Simulate a decision already committed by another decider: the store
-	// reports ErrAlreadyDecided with the durable decision when abandon runs.
+	// 模拟另一个决策者已提交的决策：abandon 执行时，存储会返回
+	// ErrAlreadyDecided 并附带已持久化的决策。
 	fixture.store.mu.Lock()
 	record := fixture.store.records[approvalID]
 	record.Status = StatusApproved

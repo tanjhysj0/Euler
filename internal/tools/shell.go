@@ -1,4 +1,4 @@
-// Package tools implements the host-side tools the agent can invoke.
+// Package tools 实现 agent 可调用的宿主侧工具。
 package tools
 
 import (
@@ -15,38 +15,36 @@ import (
 )
 
 const (
-	// defaultShell is the macOS login shell that runs every command. The
-	// interpreter path stays a compile-time constant so the launched process is
-	// fixed, and the command text travels over standard input instead of as an
-	// argument, which keeps a model-supplied command out of argv.
+	// defaultShell 是运行每条命令的 macOS 登录 shell。解释器路径保持为
+	// 编译期常量，因此启动的进程是固定的；命令文本通过标准输入传递而不是
+	// 作为参数传入，从而避免模型提供的命令出现在 argv 中。
 	defaultShell = "/bin/zsh"
-	// loginFlag starts a login shell so the user's PATH setup applies.
+	// loginFlag 以登录 shell 启动，使用户的 PATH 设置生效。
 	loginFlag = "-l"
-	// stdinFlag reads the command from the shell's standard input.
+	// stdinFlag 让 shell 从标准输入读取命令。
 	stdinFlag = "-s"
-	// envAssignment separates an environment key from its value.
+	// envAssignment 分隔环境变量的键与值。
 	envAssignment = "="
-	// emptyCapacity builds slices with a preset length.
+	// emptyCapacity 用于以预设长度构建切片。
 	emptyCapacity = 0
-	// noTimeout means "inherit the configured deadline".
+	// noTimeout 表示“沿用配置的截止时间”。
 	noTimeout time.Duration = 0
 )
 
 var (
-	// ErrUnsupportedPlatform marks host execution that has no adapter here.
+	// ErrUnsupportedPlatform 标记当前平台没有适配器的宿主执行。
 	ErrUnsupportedPlatform = errors.New("shell execution unsupported on this platform")
 )
 
-// ShellConfig bounds every command of one executor.
+// ShellConfig 为单个执行器的每条命令设定限制。
 type ShellConfig struct {
 	Timeout        time.Duration
 	MaxOutputBytes int
 }
 
-// ShellRequest is one host command. Dir is the workspace directory shown in the
-// approval card; it is convenience, not a security boundary. Timeout overrides
-// the configured deadline for this command only, and SecretNames lists the
-// environment variables referencing model credentials to strip.
+// ShellRequest 表示一条宿主命令。Dir 是审批卡片中展示的工作区目录；
+// 它只是便利信息，并非安全边界。Timeout 仅对本条命令覆盖配置的截止时间，
+// SecretNames 列出引用模型凭据、需要剔除的环境变量。
 type ShellRequest struct {
 	Dir         string        `json:"dir,omitempty"`
 	Command     string        `json:"command"`
@@ -54,9 +52,9 @@ type ShellRequest struct {
 	SecretNames []string      `json:"secret_names,omitempty"`
 }
 
-// ShellResult is the outcome of one command. Err is the Go error explaining a
-// failed or interrupted run: context.DeadlineExceeded when the timeout fired,
-// context.Canceled when the caller gave up, otherwise the start failure.
+// ShellResult 是一条命令的执行结果。Err 是解释执行失败或中断的 Go 错误：
+// 超时触发时为 context.DeadlineExceeded，调用方放弃时为 context.Canceled，
+// 否则为启动失败的错误。
 type ShellResult struct {
 	Output    string `json:"output"`
 	ExitCode  int    `json:"exit_code"`
@@ -65,22 +63,21 @@ type ShellResult struct {
 	Err       error  `json:"-"`
 }
 
-// GuardedCall pairs one approval request with the command it authorises.
+// GuardedCall 将一个审批请求与其授权的命令配对。
 type GuardedCall struct {
 	Approval approval.Request
 	Shell    ShellRequest
 }
 
-// Shell executes host commands through the system login shell.
+// Shell 通过系统登录 shell 执行宿主命令。
 type Shell struct{ config ShellConfig }
 
-// NewShellExecutor builds one Shell from configuration.
+// NewShellExecutor 根据配置构建一个 Shell。
 func NewShellExecutor(config ShellConfig) *Shell { return &Shell{config: config} }
 
-// Execute runs the command as a login-shell script read from standard input,
-// inside request.Dir, with every credential reference stripped from the child
-// environment. Timeout or cancellation kills the whole process group, and the
-// combined output is truncated at the configured maximum.
+// Execute 在 request.Dir 内，把命令作为从标准输入读取的登录 shell 脚本运行，
+// 并从子进程环境中剔除所有凭据引用。超时或取消会杀死整个进程组，
+// 合并输出会在配置的最大值处截断。
 func (s *Shell) Execute(ctx context.Context, request ShellRequest) ShellResult {
 	shellCtx, cancel := context.WithTimeout(ctx, s.timeout(request.Timeout))
 	defer cancel()
@@ -96,9 +93,8 @@ func (s *Shell) Execute(ctx context.Context, request ShellRequest) ShellResult {
 	return collect(shellCtx, output, cmd.Run())
 }
 
-// RunGuarded asks gate for a decision first and starts the command only when
-// the decision is approved, so a rejected or cancelled call leaves no side
-// effect on disk.
+// RunGuarded 先向 gate 请求裁决，只有在获批后才启动命令，
+// 因此被拒绝或取消的调用不会在磁盘上留下任何副作用。
 func (s *Shell) RunGuarded(
 	ctx context.Context,
 	gate approval.Gate,
@@ -114,7 +110,7 @@ func (s *Shell) RunGuarded(
 	return s.Execute(ctx, call.Shell), decision, nil
 }
 
-// timeout prefers the per-command deadline and falls back to the configuration.
+// timeout 优先使用单条命令的截止时间，否则回退到配置值。
 func (s *Shell) timeout(requested time.Duration) time.Duration {
 	if requested > noTimeout {
 		return requested
@@ -122,7 +118,7 @@ func (s *Shell) timeout(requested time.Duration) time.Duration {
 	return s.config.Timeout
 }
 
-// collect interprets the process outcome and the reason its context ended.
+// collect 解读进程的执行结果以及其 context 结束的原因。
 func collect(ctx context.Context, output *limitedWriter, runErr error) ShellResult {
 	result := ShellResult{Output: output.String(), Truncated: output.Truncated()}
 	switch {
@@ -142,8 +138,8 @@ func collect(ctx context.Context, output *limitedWriter, runErr error) ShellResu
 	return result
 }
 
-// SanitizeEnvironment drops every entry whose key names a credential reference
-// while preserving the order of the remaining entries.
+// SanitizeEnvironment 丢弃所有键名为凭据引用的条目，
+// 同时保留其余条目的顺序。
 func SanitizeEnvironment(environ, secretNames []string) []string {
 	blocked := make(map[string]struct{}, len(secretNames))
 	for _, name := range secretNames {
@@ -160,9 +156,9 @@ func SanitizeEnvironment(environ, secretNames []string) []string {
 	return filtered
 }
 
-// limitedWriter keeps the first limit bytes written by either stream and
-// reports truncation once. It always claims the whole buffer: exec copies from
-// a pipe and a short write would surface as io.ErrShortWrite.
+// limitedWriter 保留任一流写入的前 limit 个字节，并只报告一次截断。
+// 它始终声称写入了整个缓冲区：exec 从管道复制数据，
+// 短写会导致 io.ErrShortWrite。
 type limitedWriter struct {
 	mu        sync.Mutex
 	buffer    []byte
@@ -185,14 +181,14 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// String renders the captured bytes.
+// String 返回捕获的字节内容。
 func (w *limitedWriter) String() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return string(w.buffer)
 }
 
-// Truncated reports whether output was dropped.
+// Truncated 报告是否有输出被丢弃。
 func (w *limitedWriter) Truncated() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()

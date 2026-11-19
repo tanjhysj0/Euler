@@ -35,7 +35,7 @@ func performDecision(
 	return recorder
 }
 
-// seedApproval inserts one approval row straight into the fake store.
+// seedApproval 直接向 fake store 插入一行审批。
 func seedApproval(store *fakeStore, status string) Record {
 	record := Record{
 		ID:          uuid.New(),

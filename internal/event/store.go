@@ -15,7 +15,7 @@ import (
 	"euler/internal/persistence"
 )
 
-// Store is the PostgreSQL backed event store.
+// Store 是基于 PostgreSQL 的事件存储。
 type Store struct {
 	db  *gorm.DB
 	hub *Hub
@@ -23,13 +23,13 @@ type Store struct {
 
 var _ Publisher = (*Store)(nil)
 
-// NewStore builds a Store that publishes committed events to hub.
+// NewStore 构建一个将已提交事件发布到 hub 的 Store。
 func NewStore(db *gorm.DB, hub *Hub) *Store {
 	return &Store{db: db, hub: hub}
 }
 
-// Append persists one event at the run's next sequence and then publishes the
-// committed row to live subscribers.
+// Append 以 run 的下一个序号持久化一条事件，随后将已提交的记录发布给
+// 在线订阅者。
 func (s *Store) Append(
 	ctx context.Context, runID uuid.UUID, eventType string, payload any,
 ) (Event, error) {
@@ -46,7 +46,7 @@ func (s *Store) Append(
 	return stored, nil
 }
 
-// AppendTx inserts the event inside tx; publish after the caller commits.
+// AppendTx 在 tx 内插入事件；调用方提交后再进行发布。
 func AppendTx(
 	tx *gorm.DB, runID uuid.UUID, eventType string, payload any,
 ) (Event, error) {
@@ -62,7 +62,7 @@ func AppendTx(
 	return stored, nil
 }
 
-// Publish delivers a committed event to live subscribers.
+// Publish 将已提交的事件投递给在线订阅者。
 func (s *Store) Publish(e Event) {
 	s.hub.Publish(e)
 }
@@ -111,8 +111,7 @@ func appendPending(tx *gorm.DB, pending pendingEvent, stored *Event) error {
 	return nil
 }
 
-// ListAfter returns the run's events with a sequence greater than after in
-// ascending order.
+// ListAfter 按升序返回该 run 中序号大于 after 的事件。
 func (s *Store) ListAfter(
 	ctx context.Context, runID uuid.UUID, after int64,
 ) ([]Event, error) {
@@ -138,7 +137,7 @@ func (s *Store) ListAfter(
 	return events, nil
 }
 
-// Subscribe registers a live subscription for runID.
+// Subscribe 为 runID 注册一个实时订阅。
 func (s *Store) Subscribe(runID uuid.UUID) (<-chan Event, func()) {
 	return s.hub.Subscribe(runID)
 }

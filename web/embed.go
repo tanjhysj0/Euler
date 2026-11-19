@@ -1,4 +1,4 @@
-// Package web embeds the built frontend distribution for same-origin hosting.
+// Package web 嵌入构建好的前端产物，用于同源托管。
 package web
 
 import (
@@ -19,7 +19,7 @@ func init() {
 	distRoot = sub
 }
 
-// Dist returns the embedded frontend build rooted at the dist directory.
+// Dist 返回以 dist 目录为根的嵌入式前端构建产物。
 func Dist() fs.FS {
 	return distRoot
 }

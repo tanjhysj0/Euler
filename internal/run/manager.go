@@ -13,12 +13,12 @@ import (
 	"euler/internal/logging"
 )
 
-// Limits caps a single run's lifetime.
+// Limits 限制单个 run 的生命周期。
 type Limits struct {
 	MaxDuration time.Duration
 }
 
-// Manager owns run workers, cancellation and graceful shutdown.
+// Manager 负责 run worker、取消和优雅关闭。
 type Manager struct {
 	store  *Store
 	runner Runner
@@ -34,8 +34,8 @@ var errManagerClosing = errors.New("run manager is shutting down")
 
 const noDuration time.Duration = 0
 
-// NewManager builds a Manager that persists through store. Runs are executed
-// by runner under limits.
+// NewManager 构建一个通过 store 持久化的 Manager。run 由 runner 在 limits
+// 约束下执行。
 func NewManager(store *Store, runner Runner, limits Limits) *Manager {
 	return &Manager{
 		store:   store,
@@ -45,8 +45,7 @@ func NewManager(store *Store, runner Runner, limits Limits) *Manager {
 	}
 }
 
-// Start persists a new run and executes it in the background. It returns as
-// soon as the run and its messages are committed.
+// Start 持久化一个新的 run 并在后台执行它。run 及其消息提交完成后即返回。
 func (m *Manager) Start(
 	ctx context.Context, sessionID uuid.UUID, content string,
 ) (StartResult, error) {
@@ -80,8 +79,7 @@ func (m *Manager) dispatch(ctx context.Context, request Request) bool {
 	return true
 }
 
-// Cancel stops an active run. It is idempotent and returns nil for runs that
-// are already terminal.
+// Cancel 停止一个活跃的 run。它是幂等的，对已处于终态的 run 返回 nil。
 func (m *Manager) Cancel(ctx context.Context, runID uuid.UUID) error {
 	m.mu.Lock()
 	cancel := m.workers[runID]
@@ -93,13 +91,13 @@ func (m *Manager) Cancel(ctx context.Context, runID uuid.UUID) error {
 	return err
 }
 
-// RecoverInterrupted repairs runs left active by a previous process.
+// RecoverInterrupted 修复上一个进程遗留的活跃 run。
 func (m *Manager) RecoverInterrupted(ctx context.Context) error {
 	return m.store.RecoverInterrupted(ctx)
 }
 
-// Shutdown cancels every worker and waits for them, bounded by ctx. Runs
-// cancelled during shutdown are recorded as interrupted.
+// Shutdown 取消所有 worker 并等待其结束，等待时长以 ctx 为上限。关闭期间
+// 被取消的 run 会被记录为 interrupted。
 func (m *Manager) Shutdown(ctx context.Context) error {
 	for _, cancel := range m.beginShutdown() {
 		cancel()
@@ -143,8 +141,8 @@ func (m *Manager) execute(ctx context.Context, request Request) {
 	m.finish(dbCtx, request, m.runner.Run(ctx, request))
 }
 
-// handlePanic records a worker panic as a failed run; the panic value is only
-// logged after redaction and never reaches responses or events.
+// handlePanic 将 worker 的 panic 记录为失败的 run；panic 值仅在脱敏后写入
+// 日志，绝不会出现在响应或事件中。
 func (m *Manager) handlePanic(ctx context.Context, request Request, recovered any) {
 	detail := logging.Redact(fmt.Sprintf("%v", recovered))
 	slog.Error("run worker panic", logKeyRunID, request.RunID, logKeyError, detail)
@@ -219,9 +217,8 @@ func (m *Manager) interruptRun(ctx context.Context, runID uuid.UUID) {
 	}
 }
 
-// newRunContext detaches the run from the HTTP request lifecycle. WithoutCancel
-// strips the request's cancellation and deadline before MaxDuration adds the
-// only deadline the run obeys.
+// newRunContext 将 run 与 HTTP 请求的生命周期解耦。WithoutCancel 先剥离
+// 请求的取消信号和截止时间，再由 MaxDuration 设置 run 唯一遵循的截止时间。
 func (m *Manager) newRunContext(parent context.Context) (context.Context, context.CancelFunc) {
 	detached := context.WithoutCancel(parent)
 	if m.limits.MaxDuration > noDuration {

@@ -202,8 +202,8 @@ func TestListSessionsOrdersByLastActiveAtDesc(t *testing.T) {
 	require.Equal(t, older.ID, listed[1].ID)
 }
 
-// sessionIDs extracts view IDs so list assertions scope to their own fixtures
-// even when the shared test database holds rows from other packages.
+// sessionIDs 提取视图的 ID，使列表断言只针对自己的 fixture，
+// 即使共享测试数据库中还有其他包的行也不受影响。
 func sessionIDs(views []SessionView) []uuid.UUID {
 	ids := make([]uuid.UUID, len(views))
 	for index, view := range views {

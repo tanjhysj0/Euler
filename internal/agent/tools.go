@@ -12,9 +12,9 @@ import (
 	"euler/internal/workspace"
 )
 
-// buildTools assembles the per-run tool set: a fresh FileStore bound to the
-// run's workspace, a fresh registry with its own call budget, and every model
-// credential environment reference stripped from shell executions.
+// buildTools 组装单次 run 的工具集：绑定到该 run 工作区的全新 FileStore、
+// 拥有独立调用预算的全新 registry，并从 shell 执行中剥离所有模型凭据的
+// 环境变量引用。
 func (rt *Runtime) buildTools(
 	ctx context.Context, request run.Request,
 	profile modelprofile.ResolvedProfile, dir string,

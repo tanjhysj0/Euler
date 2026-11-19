@@ -17,15 +17,15 @@ const (
 	constantTimeMatch = 1
 )
 
-// LocalAuth guards the local API with a per-process cookie and an Origin check
-// for state-changing requests. The token only lives in memory.
+// LocalAuth 通过进程级 cookie 保护本机 API，并对改变状态的请求做 Origin
+// 检查。token 只存在于内存中。
 type LocalAuth struct {
 	token          string
 	allowedOrigins map[string]struct{}
 }
 
-// NewLocalAuth generates a fresh process token and records the extra origins
-// that may send non-idempotent requests.
+// NewLocalAuth 生成新的进程 token，并记录允许发送非幂等请求的额外
+// origin。
 func NewLocalAuth(allowedOrigins []string) (*LocalAuth, error) {
 	raw := make([]byte, localTokenBytes)
 	if _, err := rand.Read(raw); err != nil {
@@ -41,8 +41,8 @@ func NewLocalAuth(allowedOrigins []string) (*LocalAuth, error) {
 	}, nil
 }
 
-// Bootstrap issues the current local cookie. It is a side-effect-free GET so a
-// browser holding a token from a previous process can recover.
+// Bootstrap 签发当前的本机 cookie。它是无副作用的 GET，因此持有旧进程
+// token 的浏览器也能恢复访问。
 func (a *LocalAuth) Bootstrap() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.SetSameSite(http.SameSiteStrictMode)
@@ -51,7 +51,7 @@ func (a *LocalAuth) Bootstrap() gin.HandlerFunc {
 	}
 }
 
-// Require rejects requests that do not carry the current process token.
+// Require 拒绝未携带当前进程 token 的请求。
 func (a *LocalAuth) Require() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		value, err := c.Cookie(localCookieName)
@@ -63,8 +63,8 @@ func (a *LocalAuth) Require() gin.HandlerFunc {
 	}
 }
 
-// CheckOrigin rejects cross-site state-changing requests. Safe methods and
-// requests without an Origin header pass through.
+// CheckOrigin 拒绝跨站点的状态变更请求。安全方法以及不带 Origin 头的
+// 请求直接放行。
 func (a *LocalAuth) CheckOrigin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if isSafeMethod(c.Request.Method) || a.originTrusted(c.Request) {

@@ -7,17 +7,17 @@ import (
 	"gorm.io/datatypes"
 )
 
-// Workspace is a normalized directory that sessions run against.
+// Workspace 是会话运行所针对的规范化目录。
 type Workspace struct {
 	ID        uuid.UUID `gorm:"type:uuid;primaryKey"`
 	Path      string    `gorm:"column:path;not null"`
 	CreatedAt time.Time `gorm:"not null;default:now()"`
 }
 
-// TableName maps Workspace to its database table.
+// TableName 将 Workspace 映射到其数据库表。
 func (Workspace) TableName() string { return "workspaces" }
 
-// ModelProfile points at an OpenAI compatible endpoint and a secret reference.
+// ModelProfile 指向一个兼容 OpenAI 的端点和一个密钥引用。
 type ModelProfile struct {
 	ID         uuid.UUID `gorm:"type:uuid;primaryKey"`
 	Name       string    `gorm:"not null"`
@@ -29,10 +29,10 @@ type ModelProfile struct {
 	UpdatedAt  time.Time `gorm:"not null;default:now()"`
 }
 
-// TableName maps ModelProfile to its database table.
+// TableName 将 ModelProfile 映射到其数据库表。
 func (ModelProfile) TableName() string { return "model_profiles" }
 
-// Session binds a workspace and a model profile to a conversation.
+// Session 将工作区和模型配置绑定到一次对话。
 type Session struct {
 	ID             uuid.UUID `gorm:"type:uuid;primaryKey"`
 	WorkspaceID    uuid.UUID `gorm:"type:uuid;not null"`
@@ -44,10 +44,10 @@ type Session struct {
 	LastActiveAt   time.Time `gorm:"not null;default:now()"`
 }
 
-// TableName maps Session to its database table.
+// TableName 将 Session 映射到其数据库表。
 func (Session) TableName() string { return "sessions" }
 
-// Run is one agent execution inside a session.
+// Run 是会话内的一次 agent 执行。
 type Run struct {
 	ID           uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
 	SessionID    uuid.UUID  `gorm:"type:uuid;not null" json:"session_id"`
@@ -60,10 +60,10 @@ type Run struct {
 	FinishedAt   *time.Time `gorm:"column:finished_at" json:"finished_at"`
 }
 
-// TableName maps Run to its database table.
+// TableName 将 Run 映射到其数据库表。
 func (Run) TableName() string { return "runs" }
 
-// Message is a user visible conversation message with a per-session sequence.
+// Message 是用户可见的对话消息，带有会话级序号。
 type Message struct {
 	ID          uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
 	SessionID   uuid.UUID  `gorm:"type:uuid;not null" json:"session_id"`
@@ -76,10 +76,10 @@ type Message struct {
 	CompletedAt *time.Time `gorm:"column:completed_at" json:"completed_at"`
 }
 
-// TableName maps Message to its database table.
+// TableName 将 Message 映射到其数据库表。
 func (Message) TableName() string { return "messages" }
 
-// ToolCall records one model requested tool invocation.
+// ToolCall 记录一次由模型请求的工具调用。
 type ToolCall struct {
 	ID            uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
 	RunID         uuid.UUID      `gorm:"type:uuid;not null" json:"run_id"`
@@ -94,10 +94,10 @@ type ToolCall struct {
 	FinishedAt    *time.Time     `gorm:"column:finished_at" json:"finished_at"`
 }
 
-// TableName maps ToolCall to its database table.
+// TableName 将 ToolCall 映射到其数据库表。
 func (ToolCall) TableName() string { return "tool_calls" }
 
-// Approval is a pending or resolved human decision for a tool call.
+// Approval 是针对工具调用的待处理或已处理的人工决策。
 type Approval struct {
 	ID                   uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
 	RunID                uuid.UUID      `gorm:"type:uuid;not null" json:"run_id"`
@@ -109,10 +109,10 @@ type Approval struct {
 	DecidedAt            *time.Time     `gorm:"column:decided_at" json:"decided_at"`
 }
 
-// TableName maps Approval to its database table.
+// TableName 将 Approval 映射到其数据库表。
 func (Approval) TableName() string { return "approvals" }
 
-// RunEvent is an ordered event belonging to a run.
+// RunEvent 是属于某个 run 的有序事件。
 type RunEvent struct {
 	ID          uuid.UUID      `gorm:"type:uuid;primaryKey"`
 	RunID       uuid.UUID      `gorm:"type:uuid;not null"`
@@ -122,5 +122,5 @@ type RunEvent struct {
 	CreatedAt   time.Time      `gorm:"not null;default:now()"`
 }
 
-// TableName maps RunEvent to its database table.
+// TableName 将 RunEvent 映射到其数据库表。
 func (RunEvent) TableName() string { return "run_events" }

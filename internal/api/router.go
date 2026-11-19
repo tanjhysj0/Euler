@@ -1,4 +1,4 @@
-// Package api owns the HTTP router and handlers for the Euler backend.
+// Package api 负责 Euler 后端的 HTTP 路由和处理器。
 package api
 
 import (
@@ -8,13 +8,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// HealthChecker reports whether a backing dependency is reachable.
+// HealthChecker 报告后端依赖是否可达。
 type HealthChecker interface {
 	Ping(ctx context.Context) error
 }
 
-// NewRouter builds the HTTP router with the routes available so far and
-// returns the guarded /api/v1 group that authenticated handlers attach to.
+// NewRouter 用目前已有的路由构建 HTTP router，并返回受保护的 /api/v1
+// 分组，供需要认证的处理器挂载。
 func NewRouter(checker HealthChecker, auth *LocalAuth) (*gin.Engine, *gin.RouterGroup) {
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -23,14 +23,14 @@ func NewRouter(checker HealthChecker, auth *LocalAuth) (*gin.Engine, *gin.Router
 	return router, protected
 }
 
-// RegisterLocalAuth mounts the bootstrap endpoint and returns the /api/v1
-// group guarded by the local cookie and Origin checks.
+// RegisterLocalAuth 挂载 bootstrap 端点，并返回由本机 cookie 和 Origin
+// 检查保护的 /api/v1 分组。
 func RegisterLocalAuth(router *gin.Engine, auth *LocalAuth) *gin.RouterGroup {
 	router.GET("/api/v1/bootstrap", auth.Bootstrap())
 	return router.Group("/api/v1", auth.Require(), auth.CheckOrigin())
 }
 
-// RegisterHealth mounts the database health endpoint on router.
+// RegisterHealth 在 router 上挂载数据库健康检查端点。
 func RegisterHealth(router *gin.Engine, checker HealthChecker) {
 	router.GET("/health", func(c *gin.Context) {
 		if err := checker.Ping(c.Request.Context()); err != nil {

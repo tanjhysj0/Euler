@@ -14,9 +14,9 @@ const (
 	immutableCache = "public, max-age=31536000, immutable"
 )
 
-// RegisterStatic serves the embedded SPA from dist on unmatched routes.
-// API and health paths never fall back to HTML so clients always receive
-// the JSON error envelope.
+// RegisterStatic 在未匹配的路由上从 dist 提供内嵌的 SPA。
+// API 和 health 路径绝不回退到 HTML，确保客户端始终收到
+// JSON 错误信封。
 func RegisterStatic(router *gin.Engine, dist fs.FS) {
 	router.NoRoute(func(c *gin.Context) { serveStatic(c, dist) })
 }
@@ -43,8 +43,8 @@ func serveStatic(c *gin.Context, dist fs.FS) {
 	http.ServeFileFS(c.Writer, c.Request, dist, name)
 }
 
-// isStaticRequest only lets browser navigation (GET/HEAD outside the API and
-// health namespaces) reach the SPA fallback.
+// isStaticRequest 只允许浏览器导航（API 和 health 命名空间之外的
+// GET/HEAD）进入 SPA 回退。
 func isStaticRequest(method, path string) bool {
 	if method != http.MethodGet && method != http.MethodHead {
 		return false

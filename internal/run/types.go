@@ -1,5 +1,4 @@
-// Package run owns run state transitions, per-session concurrency, cancellation
-// and startup recovery.
+// Package run 负责 run 的状态迁移、按会话的并发控制、取消以及启动恢复。
 package run
 
 import (
@@ -11,7 +10,7 @@ import (
 	"euler/internal/persistence"
 )
 
-// Run statuses. Active statuses may be held by at most one run per session.
+// Run 状态。每个会话最多只能有一个 run 处于活跃状态。
 const (
 	StatusQueued          = "queued"
 	StatusRunning         = "running"
@@ -49,23 +48,23 @@ const (
 )
 
 var (
-	// ErrActiveRun reports that the session already has an active run.
+	// ErrActiveRun 表示该会话已存在一个活跃的 run。
 	ErrActiveRun = errors.New("active run exists")
-	// ErrNotFound reports that a run or session does not exist.
+	// ErrNotFound 表示 run 或会话不存在。
 	ErrNotFound = errors.New("run not found")
-	// ErrInvalidInput reports run input that cannot be accepted.
+	// ErrInvalidInput 表示无法接受的 run 输入。
 	ErrInvalidInput = errors.New("invalid run input")
 
-	// errActiveRunConflict marks a duplicate key raised by the runs insert.
-	// The runs primary key is a random UUID, so a duplicate can only come from
-	// the runs_one_active_idx partial unique index.
+	// errActiveRunConflict 标记 runs 插入时触发的唯一键冲突。
+	// runs 的主键是随机 UUID，因此冲突只可能来自
+	// runs_one_active_idx 部分唯一索引。
 	errActiveRunConflict = errors.New("active run conflict")
 
 	activeStatuses = []string{StatusQueued, StatusRunning, StatusWaitingApproval}
 )
 
-// allowedTransitions lists every state machine edge. The interrupted target is
-// reserved for the recovery repair path and never appears as a value.
+// allowedTransitions 列出状态机的全部迁移边。interrupted 目标状态仅保留给
+// 恢复修复路径，不会作为值出现在此表中。
 var allowedTransitions = map[string]map[string]bool{
 	StatusQueued: {
 		StatusRunning: true, StatusCancelled: true, StatusFailed: true,
@@ -79,14 +78,13 @@ var allowedTransitions = map[string]map[string]bool{
 	},
 }
 
-// CanTransition reports whether the state machine allows from -> to. The
-// interrupted target is reserved for the recovery repair path, so it is never
-// accepted here.
+// CanTransition 报告状态机是否允许 from -> to 的迁移。interrupted 目标状态
+// 仅保留给恢复修复路径，因此这里永远不会接受它。
 func CanTransition(from, to string) bool {
 	return allowedTransitions[from][to]
 }
 
-// Request is the immutable input handed to a Runner.
+// Request 是传递给 Runner 的不可变输入。
 type Request struct {
 	RunID              uuid.UUID
 	SessionID          uuid.UUID
@@ -94,20 +92,20 @@ type Request struct {
 	AssistantMessageID uuid.UUID
 }
 
-// Runner executes one run until completion, failure or cancellation.
+// Runner 执行一个 run，直到完成、失败或被取消。
 type Runner interface {
 	Run(ctx context.Context, request Request) error
 }
 
-// RunnerFunc adapts a function to the Runner interface.
+// RunnerFunc 将一个函数适配为 Runner 接口。
 type RunnerFunc func(ctx context.Context, request Request) error
 
-// Run calls f with the supplied context and request.
+// Run 使用传入的 context 和 request 调用 f。
 func (f RunnerFunc) Run(ctx context.Context, request Request) error {
 	return f(ctx, request)
 }
 
-// Snapshot is the authoritative state of a run for API responses.
+// Snapshot 是用于 API 响应的 run 权威状态。
 type Snapshot struct {
 	Run          persistence.Run        `json:"run"`
 	ToolCalls    []persistence.ToolCall `json:"tool_calls"`
@@ -115,7 +113,7 @@ type Snapshot struct {
 	LastEventSeq int64                  `json:"last_event_seq"`
 }
 
-// StartResult is a newly started run together with its persisted messages.
+// StartResult 是新启动的 run 及其已持久化的消息。
 type StartResult struct {
 	Snapshot
 	UserMessage      persistence.Message `json:"user_message"`

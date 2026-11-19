@@ -18,43 +18,42 @@ import (
 )
 
 const (
-	// toolPending and toolRunning are the only tool call states an approval may
-	// take over. The parked and terminal states reuse the run status machine
-	// and the approval status constants, which spell the same strings.
+	// toolPending 和 toolRunning 是审批可以接管的仅有的工具调用状态。
+	// 停驻态和终态复用运行状态机与审批状态常量，它们的字符串拼写相同。
 	toolPending = "pending"
 	toolRunning = "running"
 
-	// columnStatus is the shared status column of approvals and tool calls.
+	// columnStatus 是审批与工具调用共用的状态列。
 	columnStatus = "status"
-	// columnApprovalID links a parked tool call to its approval row.
+	// columnApprovalID 将停驻的工具调用关联到其审批行。
 	columnApprovalID = "approval_id"
-	// queryByID selects one row by primary key.
+	// queryByID 按主键选取一行。
 	queryByID = "id = ?"
 
-	// toolRejectedQuery parks the tool call of an approval that is being
-	// resolved; requiring the parked state keeps a cancelled run untouched.
+	// toolRejectedQuery 用于更新正在被决策的审批所停驻的工具调用；
+	// 要求处于停驻状态可使已取消的运行保持不动。
 	toolParkedQuery = "id = ? AND status = ?"
 
-	// pendingLeftQuery counts the approvals of one run that still park it.
+	// pendingLeftQuery 统计一个运行中仍使其停驻的审批数量。
 	pendingLeftQuery = "run_id = ? AND status = ? AND id <> ?"
-	// nonePending is the count that lets a parked run resume.
+	// nonePending 是允许停驻运行恢复的计数值。
 	nonePending = 0
-	// decisionAbsent marks an approval row without a decision payload.
+	// decisionAbsent 表示审批行没有决策载荷。
 	decisionAbsent = 0
 )
 
-// DBStore persists approvals in PostgreSQL together with the tool call and run
-// statuses they own. State and event share one transaction so a committed
-// decision is always replayable; callers publish only after the commit.
+// DBStore 将审批及其所辖的工具调用与运行状态持久化到 PostgreSQL。
+// 状态与事件共享同一个事务，因此已提交的决策始终可回放；
+// 调用方只在提交后才发布事件。
 type DBStore struct{ db *gorm.DB }
 
-// NewDBStore wires the durable approval store.
+// NewDBStore 组装持久化审批存储。
 func NewDBStore(db *gorm.DB) *DBStore { return &DBStore{db: db} }
 
 var _ Store = (*DBStore)(nil)
 
-// Open writes the pending approval, parks the tool call and the run in
-// waiting_approval and appends approval.requested, all in one transaction.
+// Open 写入待决策的审批，把工具调用和运行停在 waiting_approval 状态，
+// 并追加 approval.requested，全部在同一个事务中完成。
 func (s *DBStore) Open(ctx context.Context, request Request) (event.Event, error) {
 	var appended event.Event
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -73,8 +72,8 @@ func (s *DBStore) Open(ctx context.Context, request Request) (event.Event, error
 		if err != nil {
 			return err
 		}
-		// The approval row must exist before the tool call references it:
-		// tool_calls.approval_id is an immediate foreign key.
+		// 审批行必须先于工具调用对它的引用而存在：
+		// tool_calls.approval_id 是立即校验的外键。
 		row, err := newApprovalRow(request)
 		if err != nil {
 			return err
@@ -98,9 +97,9 @@ func (s *DBStore) Open(ctx context.Context, request Request) (event.Event, error
 	return appended, nil
 }
 
-// Resolve records the first decision for id, resumes the run when no approval
-// still parks it and appends approval.resolved. A row that is no longer pending
-// returns ErrAlreadyDecided with the durable decision it already holds.
+// Resolve 记录 id 的首次决策，当不再有审批使运行停驻时恢复运行，
+// 并追加 approval.resolved。已不处于 pending 的行返回 ErrAlreadyDecided，
+// 并附带其已持久化的决策。
 func (s *DBStore) Resolve(
 	ctx context.Context,
 	id uuid.UUID,
@@ -143,7 +142,7 @@ func (s *DBStore) Resolve(
 	return record, appended, nil
 }
 
-// Get loads one approval.
+// Get 加载一个审批。
 func (s *DBStore) Get(ctx context.Context, id uuid.UUID) (Record, error) {
 	var row persistence.Approval
 	err := s.db.WithContext(ctx).First(&row, queryByID, id).Error
@@ -156,9 +155,8 @@ func (s *DBStore) Get(ctx context.Context, id uuid.UUID) (Record, error) {
 	return newRecord(row), nil
 }
 
-// lockToolCall checks that the tool call belongs to the run, is still waiting
-// to start and has no approval of its own, holding its row lock until the
-// surrounding transaction ends.
+// lockToolCall 检查工具调用属于该运行、仍在等待启动且尚无自己的审批，
+// 并持有其行锁直到外层事务结束。
 func lockToolCall(tx *gorm.DB, request Request) (persistence.ToolCall, error) {
 	var call persistence.ToolCall
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -180,7 +178,7 @@ func lockToolCall(tx *gorm.DB, request Request) (persistence.ToolCall, error) {
 	}
 }
 
-// newApprovalRow marshals the reviewed request into a pending approval row.
+// newApprovalRow 将待审核的请求序列化为一行 pending 审批。
 func newApprovalRow(request Request) (persistence.Approval, error) {
 	payload, err := json.Marshal(requestedPayload(request))
 	if err != nil {
@@ -195,11 +193,10 @@ func newApprovalRow(request Request) (persistence.Approval, error) {
 	}, nil
 }
 
-// lockRunForApproval reads the approval's run without locking, then locks the
-// run row before the approval itself. Every transaction that touches a run
-// and its approvals must lock in the order run → approval → tool call:
-// run.Finish/Cancel lock the run first, so locking the approval first here
-// would invert the order and can deadlock (PostgreSQL 40P01).
+// lockRunForApproval 先不加锁地读取审批所属的运行，再在锁定审批本身
+// 之前锁定运行行。所有涉及运行及其审批的事务必须按
+// run → approval → tool call 的顺序加锁：run.Finish/Cancel 先锁运行，
+// 若这里先锁审批就会颠倒顺序，可能导致死锁（PostgreSQL 40P01）。
 func lockRunForApproval(tx *gorm.DB, id uuid.UUID) error {
 	var approval persistence.Approval
 	err := tx.Select("run_id").First(&approval, queryByID, id).Error
@@ -218,7 +215,7 @@ func lockRunForApproval(tx *gorm.DB, id uuid.UUID) error {
 	return nil
 }
 
-// lockApproval loads one approval with a row lock.
+// lockApproval 以行锁加载一个审批。
 func lockApproval(tx *gorm.DB, id uuid.UUID) (persistence.Approval, error) {
 	var row persistence.Approval
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, queryByID, id).Error
@@ -231,9 +228,8 @@ func lockApproval(tx *gorm.DB, id uuid.UUID) (persistence.Approval, error) {
 	return row, nil
 }
 
-// writeDecision stores the decision and its outcome payload of one approval,
-// then mirrors the committed columns onto row so the caller's record matches
-// the database without a second read.
+// writeDecision 存储一个审批的决策及其结果载荷，然后把已提交的列
+// 同步回 row，使调用方的记录无需二次读取即与数据库一致。
 func writeDecision(
 	tx *gorm.DB,
 	row *persistence.Approval,
@@ -261,9 +257,9 @@ func writeDecision(
 	return nil
 }
 
-// resolveToolCall moves the parked tool call on: an approved call runs, a
-// rejected or cancelled one is finished. Requiring the parked state keeps
-// cancellations written by the run state machine untouched.
+// resolveToolCall 推进停驻的工具调用：批准的调用转为运行，
+// 被拒绝或取消的调用则结束。要求处于停驻状态可使运行状态机
+// 写入的取消结果保持不动。
 func resolveToolCall(
 	tx *gorm.DB,
 	toolCallID uuid.UUID,
@@ -284,8 +280,8 @@ func resolveToolCall(
 	return nil
 }
 
-// releaseRun resumes a parked run once no approval still holds it. A run that
-// cancellation already closed is left untouched by SetStatusTx.
+// releaseRun 在不再有审批扣住运行时恢复停驻的运行。
+// 已被取消关闭的运行不会被 SetStatusTx 改动。
 func releaseRun(tx *gorm.DB, row persistence.Approval) error {
 	pending, err := pendingApprovals(tx, row)
 	if err != nil {
@@ -299,8 +295,8 @@ func releaseRun(tx *gorm.DB, row persistence.Approval) error {
 	return err
 }
 
-// pendingApprovals counts the approvals of one run still waiting for a
-// decision, excluding the row being resolved.
+// pendingApprovals 统计一个运行中仍在等待决策的审批数量，
+// 不含正在被决策的那一行。
 func pendingApprovals(tx *gorm.DB, row persistence.Approval) (int64, error) {
 	var count int64
 	err := tx.Model(&persistence.Approval{}).
@@ -311,8 +307,8 @@ func pendingApprovals(tx *gorm.DB, row persistence.Approval) (int64, error) {
 	return count, nil
 }
 
-// newRecord projects one approval row onto the API view. A stored decision
-// payload wins over the status column so a rejected row never reads as approved.
+// newRecord 将一行审批映射为 API 视图。已存储的决策载荷优先于状态列，
+// 因此被拒绝的行绝不会被读成已批准。
 func newRecord(row persistence.Approval) Record {
 	decision := Decision{Status: row.Status, Approved: row.Status == StatusApproved}
 	if len(row.DecisionPayloadJSON) > decisionAbsent {

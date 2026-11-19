@@ -115,8 +115,8 @@ func insertSessionFixture(t *testing.T, db *gorm.DB) uuid.UUID {
 	return session.ID
 }
 
-// deleteFixtureRows removes every row owned by one fixture workspace, following
-// the foreign-key order. Shared tables are never truncated.
+// deleteFixtureRows 删除属于单个测试工作区的所有数据行，删除遵循外键顺序。
+// 绝不清空共享表。
 func deleteFixtureRows(t *testing.T, db *gorm.DB, workspaceID, profileID uuid.UUID) {
 	t.Helper()
 	var sessionIDs []uuid.UUID

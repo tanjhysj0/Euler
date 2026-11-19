@@ -113,8 +113,8 @@ func openAIDeps(t *testing.T, fixture *runtimeFixture, baseURL string) Deps {
 	return deps
 }
 
-// openAIServer simulates the OpenAI chat/completions endpoint locally; no
-// request ever leaves the loopback interface.
+// openAIServer 在本地模拟 OpenAI 的 chat/completions 端点；
+// 任何请求都不会离开 loopback 接口。
 type openAIServer struct {
 	t        *testing.T
 	mu       sync.Mutex

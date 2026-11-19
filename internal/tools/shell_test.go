@@ -17,7 +17,7 @@ import (
 	"euler/internal/approval"
 )
 
-// fakeGate answers every approval request with a fixed decision.
+// fakeGate 用固定的裁决回应每一个审批请求。
 type fakeGate struct {
 	decision approval.Decision
 	err      error
@@ -42,8 +42,8 @@ func TestSanitizeEnvironmentRemovesModelSecrets(t *testing.T) {
 }
 
 func TestShellTimeoutAndTruncation(t *testing.T) {
-	// The login shell needs more than 50ms to start on a real host, so the
-	// truncation leg gets a generous deadline; only the timeout leg uses 50ms.
+	// 在真实主机上登录 shell 的启动耗时超过 50ms，因此截断分支
+	// 使用宽松的截止时间；只有超时分支使用 50ms。
 	truncating := NewShellExecutor(ShellConfig{Timeout: 10 * time.Second, MaxOutputBytes: 8})
 	result := truncating.Execute(context.Background(),
 		ShellRequest{Dir: t.TempDir(), Command: "printf 123456789"})
@@ -108,7 +108,7 @@ func TestShellKillsProcessGroupOnCancel(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond)
 }
 
-// waitForChildPID polls until the background child wrote its complete pid.
+// waitForChildPID 轮询直到后台子进程写入完整的 pid。
 func waitForChildPID(t *testing.T, pidFile string) int {
 	t.Helper()
 	var pid int

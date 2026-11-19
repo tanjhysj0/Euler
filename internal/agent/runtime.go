@@ -25,14 +25,14 @@ import (
 
 const emptyHistory = 0
 
-// ChatModelFactory builds the base chat model for one resolved profile.
+// ChatModelFactory 为单个已解析的 profile 构建基础 chat 模型。
 type ChatModelFactory interface {
 	New(ctx context.Context, profile modelprofile.ResolvedProfile) (
 		model.ToolCallingChatModel, error)
 }
 
-// Deps carries everything one run needs; each Run builds fresh tool closures
-// so no workspace or approval state leaks between runs.
+// Deps 携带单次 run 所需的全部依赖；每次 Run 都会构建全新的工具闭包，
+// 避免工作区或审批状态在 run 之间泄漏。
 type Deps struct {
 	DB               *gorm.DB
 	Events           event.Publisher
@@ -46,13 +46,13 @@ type Deps struct {
 	PreviewBytes     int
 }
 
-// Runtime executes one run through the Eino ReAct loop.
+// Runtime 通过 Eino ReAct 循环执行单次 run。
 type Runtime struct {
 	deps Deps
 }
 
-// NewRuntime builds a Runtime; a nil Factory defaults to the real OpenAI
-// compatible chat model factory.
+// NewRuntime 构建一个 Runtime；Factory 为 nil 时默认使用真实的 OpenAI
+// 兼容 chat 模型工厂。
 func NewRuntime(deps Deps) *Runtime {
 	if deps.Factory == nil {
 		deps.Factory = OpenAIChatModelFactory{}
@@ -67,8 +67,8 @@ const (
 	maxStepHeadroom  = 10
 )
 
-// Run drives the model/tool loop until the final answer, streaming assistant
-// deltas into the run's message and events along the way.
+// Run 驱动模型/工具循环直到得出最终答案，过程中将助手增量内容流式写入
+// run 的消息和事件。
 func (rt *Runtime) Run(ctx context.Context, request run.Request) error {
 	var session persistence.Session
 	if err := rt.deps.DB.WithContext(ctx).
@@ -95,8 +95,8 @@ func (rt *Runtime) Run(ctx context.Context, request run.Request) error {
 	return rt.stream(ctx, reactAgent, history, writer)
 }
 
-// stream drains the final output in parallel with the per-round future
-// streams; either failure cancels the other through the errgroup context.
+// stream 并行消费最终输出与每轮的 future stream；任一方失败都会通过
+// errgroup 的 context 取消另一方。
 func (*Runtime) stream(
 	ctx context.Context, reactAgent *react.Agent,
 	history []*schema.Message, writer *deltaWriter,
@@ -139,9 +139,9 @@ func (rt *Runtime) buildAgent(
 	return reactAgent, nil
 }
 
-// loadHistory builds the display history: one system message, prior completed
-// user/assistant messages, then the current user message. Tool traffic stays
-// inside Eino state and never enters persisted history.
+// loadHistory 构建展示用历史：一条 system 消息、此前已完成的
+// user/assistant 消息，最后是当前的 user 消息。工具交互只保留在
+// Eino 状态内部，不会进入持久化历史。
 func (rt *Runtime) loadHistory(
 	ctx context.Context, request run.Request, dir string,
 ) ([]*schema.Message, error) {

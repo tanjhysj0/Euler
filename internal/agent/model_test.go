@@ -208,8 +208,8 @@ func callErr(errs []error, call int) error {
 	return nil
 }
 
-// newErrorPipe delivers one chunk and then a mid-stream error, so the retry
-// wrapper's stream error mapping can be exercised.
+// newErrorPipe 先发送一个 chunk，随后抛出流中途错误，
+// 以便验证 retry 包装器的 stream 错误映射。
 func newErrorPipe(pipeErr error) (*schema.StreamReader[*schema.Message], error) {
 	reader, writer := schema.Pipe[*schema.Message](2)
 	writer.Send(schema.AssistantMessage("part", nil), nil)

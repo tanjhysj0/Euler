@@ -36,7 +36,7 @@ type fileDeleteInput struct {
 	Path string `json:"path" jsonschema:"description=工作区内的文件路径"`
 }
 
-// fileToolset binds the six file tools to one workspace FileStore.
+// fileToolset 将六个文件工具绑定到同一个工作区 FileStore。
 type fileToolset struct {
 	registry *Registry
 	files    *workspace.FileStore
@@ -134,8 +134,8 @@ func (s fileToolset) delete(ctx context.Context, input fileDeleteInput) (toolOut
 	return s.mutationOutcome(input.Path, change), nil
 }
 
-// mutationOutcome defers the side effect until approval: the payload carries
-// the prepared diff and apply replays the exact prepared change.
+// mutationOutcome 将副作用推迟到审批通过之后：payload 携带
+// 预先准备好的 diff，apply 原样重放这份已准备好的变更。
 func (s fileToolset) mutationOutcome(path string, change workspace.FileChange) toolOutcome {
 	return toolOutcome{
 		payload: map[string]any{"path": path, "diff": s.registry.truncate(change.Diff)},
@@ -151,7 +151,7 @@ func (s fileToolset) mutationOutcome(path string, change workspace.FileChange) t
 	}
 }
 
-// fileFailure maps workspace sentinels to stable, user facing error codes.
+// fileFailure 将 workspace 的哨兵错误映射为稳定、面向用户的错误码。
 func fileFailure(err error, path string) map[string]any {
 	var code, message string
 	switch {

@@ -14,9 +14,8 @@ import (
 	"euler/internal/persistence"
 )
 
-// Start creates a queued run with its user and streaming assistant messages in
-// one transaction. It returns the workspace concurrency warning so the caller
-// can surface concurrent edits from other sessions on the same directory.
+// Start 在一个事务中创建一个 queued 状态的 run 及其用户消息和流式 assistant
+// 消息。它返回工作区并发警告，便于调用方提示同一目录下其他会话的并发编辑。
 func (s *Store) Start(
 	ctx context.Context, sessionID uuid.UUID, content string,
 ) (StartResult, error) {

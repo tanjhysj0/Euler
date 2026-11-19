@@ -1,5 +1,5 @@
-// Package agent runs the Eino ReAct loop for one run: model rounds, tool
-// calls, approval gated side effects and streamed assistant output.
+// Package agent 为单次 run 执行 Eino ReAct 循环：模型轮次、工具调用、
+// 需审批的副作用以及流式输出的助手回复。
 package agent
 
 import (
@@ -23,7 +23,7 @@ import (
 	"euler/internal/tools"
 )
 
-// ErrModelRoundLimit aborts a run whose model round budget is exhausted.
+// ErrModelRoundLimit 用于中止模型轮次预算耗尽的 run。
 var ErrModelRoundLimit = errors.New("model round limit exceeded")
 
 const (
@@ -45,10 +45,10 @@ const (
 	statusServerError  = 500
 )
 
-// OpenAIChatModelFactory builds real OpenAI compatible chat models.
+// OpenAIChatModelFactory 构建真实的 OpenAI 兼容 chat 模型。
 type OpenAIChatModelFactory struct{}
 
-// New creates one chat model for profile.
+// New 为指定 profile 创建一个 chat 模型。
 func (OpenAIChatModelFactory) New(
 	ctx context.Context, profile modelprofile.ResolvedProfile,
 ) (model.ToolCallingChatModel, error) {
@@ -64,8 +64,8 @@ func (OpenAIChatModelFactory) New(
 	return chatModel, nil
 }
 
-// roundLimitedModel caps Generate and Stream calls across every wrapper the
-// ReAct graph derives through WithTools; all wrappers share one counter.
+// roundLimitedModel 限制 Generate 和 Stream 的调用次数，覆盖 ReAct 图通过
+// WithTools 派生的所有包装器；所有包装器共享同一个计数器。
 type roundLimitedModel struct {
 	base  model.ToolCallingChatModel
 	calls *atomic.Int64
@@ -76,6 +76,7 @@ func newRoundLimitedModel(base model.ToolCallingChatModel, maxRounds int) *round
 	return &roundLimitedModel{base: base, calls: &atomic.Int64{}, max: maxRounds}
 }
 
+// Generate 先消耗一轮预算再透传底层模型；预算耗尽返回 ErrModelRoundLimit。
 func (m *roundLimitedModel) Generate(
 	ctx context.Context, input []*schema.Message, opts ...model.Option,
 ) (*schema.Message, error) {
@@ -85,6 +86,7 @@ func (m *roundLimitedModel) Generate(
 	return m.base.Generate(ctx, input, opts...)
 }
 
+// Stream 先消耗一轮预算再透传底层模型；预算耗尽返回 ErrModelRoundLimit。
 func (m *roundLimitedModel) Stream(
 	ctx context.Context, input []*schema.Message, opts ...model.Option,
 ) (*schema.StreamReader[*schema.Message], error) {
@@ -94,6 +96,7 @@ func (m *roundLimitedModel) Stream(
 	return m.base.Stream(ctx, input, opts...)
 }
 
+// WithTools 包装绑定工具后的模型，并让新包装器共享同一个轮次计数器。
 func (m *roundLimitedModel) WithTools(
 	infos []*schema.ToolInfo,
 ) (model.ToolCallingChatModel, error) {
@@ -111,16 +114,15 @@ func (m *roundLimitedModel) count() error {
 	return nil
 }
 
-// IsCallbacksEnabled forwards the base model's self-callback reporting so the
-// ReAct graph does not add a second callback layer over a model that already
-// emits its own, which would deliver every round stream to the future twice.
+// IsCallbacksEnabled 透传底层模型的自回调上报能力，避免 ReAct 图在已自带
+// 回调的模型外再叠加一层回调，否则每轮的 stream 会被重复投递到 future 两次。
 func (m *roundLimitedModel) IsCallbacksEnabled() bool {
 	return components.IsCallbacksEnabled(m.base)
 }
 
-// retryModel retries only the initial Generate/Stream call on network errors,
-// 429 and 5xx, twice with 100ms/200ms backoff. Every other failure is mapped
-// to a coded, redacted error; context errors pass through untouched.
+// retryModel 仅在初始 Generate/Stream 调用遇到网络错误、429 和 5xx 时重试，
+// 最多重试两次，退避间隔为 100ms/200ms。其他失败均映射为带错误码且脱敏的
+// 错误；context 错误原样透传。
 type retryModel struct {
 	base   model.ToolCallingChatModel
 	apiKey string
@@ -130,6 +132,7 @@ func newRetryModel(base model.ToolCallingChatModel, apiKey string) *retryModel {
 	return &retryModel{base: base, apiKey: apiKey}
 }
 
+// Generate 对可重试错误按退避重试；其余错误映射为带错误码且脱敏的错误。
 func (m *retryModel) Generate(
 	ctx context.Context, input []*schema.Message, opts ...model.Option,
 ) (*schema.Message, error) {
@@ -147,6 +150,7 @@ func (m *retryModel) Generate(
 	}
 }
 
+// Stream 对初始建流失败按退避重试；成功后的流中途错误只映射不重试。
 func (m *retryModel) Stream(
 	ctx context.Context, input []*schema.Message, opts ...model.Option,
 ) (*schema.StreamReader[*schema.Message], error) {
@@ -164,6 +168,7 @@ func (m *retryModel) Stream(
 	}
 }
 
+// WithTools 包装绑定工具后的模型，使派生模型保留同样的重试与脱敏语义。
 func (m *retryModel) WithTools(
 	infos []*schema.ToolInfo,
 ) (model.ToolCallingChatModel, error) {
@@ -181,14 +186,14 @@ func (m *retryModel) mapError(err error) error {
 	return mapModelError(err, m.apiKey)
 }
 
-// IsCallbacksEnabled forwards the base model's self-callback reporting; see
-// roundLimitedModel.IsCallbacksEnabled.
+// IsCallbacksEnabled 透传底层模型的自回调上报能力；参见
+// roundLimitedModel.IsCallbacksEnabled。
 func (m *retryModel) IsCallbacksEnabled() bool {
 	return components.IsCallbacksEnabled(m.base)
 }
 
-// wrapStreamErrors maps mid-stream failures without retrying them; context
-// errors pass through so cancellation keeps its run semantics.
+// wrapStreamErrors 映射流中途的失败但不重试；context 错误原样透传，
+// 使取消操作保持其 run 语义。
 func wrapStreamErrors(
 	stream *schema.StreamReader[*schema.Message], apiKey string,
 ) *schema.StreamReader[*schema.Message] {
@@ -231,8 +236,8 @@ func isContextError(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
-// mapModelError classifies a model failure into a stable run error code and
-// redacts the API key from the message before it can reach storage or logs.
+// mapModelError 将模型失败归类为稳定的 run 错误码，并在错误信息进入
+// 存储或日志之前脱敏其中的 API key。
 func mapModelError(err error, apiKey string) error {
 	code := codeModelProtocol
 	if status, ok := httpStatus(err); ok {
@@ -261,8 +266,8 @@ func statusErrorCode(status int) string {
 }
 
 func httpStatus(err error) (int, bool) {
-	// The eino-ext OpenAI wrapper rewrites go-openai API errors into its own
-	// APIError type without an Unwrap chain, so check it first.
+	// eino-ext 的 OpenAI 包装器会把 go-openai 的 API 错误改写为自己的
+	// APIError 类型且没有 Unwrap 链，因此先检查它。
 	var extErr *openai.APIError
 	if errors.As(err, &extErr) {
 		return extErr.HTTPStatusCode, true

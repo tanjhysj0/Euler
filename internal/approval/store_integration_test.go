@@ -31,8 +31,8 @@ type dbFixture struct {
 	toolCallID uuid.UUID
 }
 
-// newDBFixture commits one running run with a pending tool call. Rows are
-// removed by cleanup in foreign-key order; nothing is truncated.
+// newDBFixture 提交一个处于运行中的 run 及其 pending 工具调用。
+// 清理时按外键顺序删除各行；不做任何 truncate。
 func newDBFixture(t *testing.T) *dbFixture {
 	t.Helper()
 	db := openApprovalTestDB(t)
@@ -101,7 +101,7 @@ func openApprovalTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// fixtureIDs names the rows one fixture owns, in foreign-key deletion order.
+// fixtureIDs 按外键删除顺序列出一个 fixture 拥有的各行。
 type fixtureIDs struct {
 	runID       uuid.UUID
 	sessionID   uuid.UUID
@@ -111,8 +111,8 @@ type fixtureIDs struct {
 
 func deleteApprovalFixtures(t *testing.T, db *gorm.DB, ids fixtureIDs) {
 	t.Helper()
-	// tool_calls.approval_id and approvals.tool_call_id reference each other;
-	// break the cycle before deleting either side.
+	// tool_calls.approval_id 和 approvals.tool_call_id 互相引用；
+	// 删除任一侧之前先打破这个循环。
 	require.NoError(t, db.Model(&persistence.ToolCall{}).Where("run_id = ?", ids.runID).
 		Update("approval_id", nil).Error)
 	require.NoError(t, db.Where("run_id = ?", ids.runID).Delete(&persistence.Approval{}).Error)
@@ -238,8 +238,8 @@ func TestResolveKeepsCancelledRunUntouched(t *testing.T) {
 	require.NoError(t, err)
 	_, err = fixture.runs.Cancel(context.Background(), fixture.runID)
 	require.NoError(t, err)
-	// Cancel already resolved the pending approval, so a late decision loses
-	// the first-decision-wins race and must not revive run or tool call.
+	// Cancel 已经决策了该 pending 审批，因此迟到的决策在
+	// “首次决策生效”的竞争中落败，绝不能复活 run 或工具调用。
 	record, _, err := fixture.store.Resolve(context.Background(), request.ID,
 		Resolution{Status: StatusApproved, Approved: true})
 	require.ErrorIs(t, err, ErrAlreadyDecided)
@@ -255,9 +255,9 @@ func TestResolveUnknownApproval(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
-// TestResolveAndCancelLockOrder races a decision against run cancellation.
-// Both transactions must lock run → approval → tool call; an inverted order
-// surfaces here as a PostgreSQL deadlock (40P01) instead of a clean outcome.
+// TestResolveAndCancelLockOrder 让决策与运行取消相互竞争。
+// 两个事务都必须按 run → approval → tool call 的顺序加锁；顺序颠倒
+// 会在这里表现为 PostgreSQL 死锁（40P01），而不是干净的结果。
 func TestResolveAndCancelLockOrder(t *testing.T) {
 	fixture := newDBFixture(t)
 	for range 10 {
@@ -283,8 +283,8 @@ func TestResolveAndCancelLockOrder(t *testing.T) {
 	}
 }
 
-// resetApprovalFixture returns the fixture to a running run with one pending
-// tool call and no approvals, so the next iteration can open a fresh approval.
+// resetApprovalFixture 将 fixture 恢复为一个运行中的 run、一个 pending
+// 工具调用且没有审批的状态，使下一轮迭代可以创建新的审批。
 func resetApprovalFixture(t *testing.T, fixture *dbFixture) {
 	t.Helper()
 	require.NoError(t, fixture.db.Model(&persistence.ToolCall{}).

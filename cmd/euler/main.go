@@ -1,4 +1,4 @@
-// Command euler runs the local single-user agent workbench backend.
+// Command euler 运行本地单用户 agent 工作台的后端。
 package main
 
 import (
@@ -51,8 +51,8 @@ func serve(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	// Generate the per-process token eagerly so startup fails fast when
-	// crypto/rand is unavailable. The token is never logged nor persisted.
+	// 提前生成进程级 token，以便在 crypto/rand 不可用时启动立即失败。
+	// 该 token 绝不会被记录到日志或持久化。
 	auth, err := api.NewLocalAuth(cfg.AllowedOrigins)
 	if err != nil {
 		return fmt.Errorf("create local auth: %w", err)
@@ -74,7 +74,7 @@ func serve(configPath string) error {
 	return serveHTTP(router, svc.runs, cfg.Listen)
 }
 
-// services carries the assembled domain services between startup steps.
+// services 在各启动步骤之间承载组装好的领域服务。
 type services struct {
 	profiles  *modelprofile.Service
 	sessions  *session.Service
@@ -124,8 +124,8 @@ func registerRoutes(
 	return router
 }
 
-// serveHTTP runs the server until SIGINT/SIGTERM, then drains HTTP and the
-// run manager before returning so deferred cleanup closes the database.
+// serveHTTP 运行服务器直到收到 SIGINT/SIGTERM，然后排空 HTTP 和
+// run manager 再返回，使延迟执行的清理逻辑关闭数据库。
 func serveHTTP(router *gin.Engine, runs *run.Manager, addr string) error {
 	server := &http.Server{
 		Addr:              addr,

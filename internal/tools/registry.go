@@ -24,25 +24,24 @@ import (
 	"euler/internal/workspace"
 )
 
-// ErrToolCallLimit aborts a run whose tool call budget is exhausted.
+// ErrToolCallLimit 用于中止工具调用预算耗尽的运行。
 var ErrToolCallLimit = errors.New("tool call limit exceeded")
 
-// CodedError carries a stable run error code alongside a redacted message and
-// the original cause. It satisfies the run manager's coded error contract
-// without importing the run package.
+// CodedError 携带稳定的运行错误码，以及脱敏后的消息和原始原因。
+// 它在不导入 run 包的情况下满足 run 管理器的带码错误约定。
 type CodedError struct {
 	Code string
 	Msg  string
 	Err  error
 }
 
-// Error returns the redacted, user safe message.
+// Error 返回脱敏后、可安全展示给用户的消息。
 func (e *CodedError) Error() string { return e.Msg }
 
-// Unwrap exposes the original cause for errors.Is and errors.As.
+// Unwrap 暴露原始原因，供 errors.Is 和 errors.As 使用。
 func (e *CodedError) Unwrap() error { return e.Err }
 
-// ErrorCode returns the stable run error code.
+// ErrorCode 返回稳定的运行错误码。
 func (e *CodedError) ErrorCode() string { return e.Code }
 
 const (
@@ -65,7 +64,7 @@ const (
 	observationCompleted = "completed"
 )
 
-// RegistryDeps carries the per-run dependencies every tool invocation needs.
+// RegistryDeps 携带每次工具调用所需的、按运行划分的依赖。
 type RegistryDeps struct {
 	DB             *gorm.DB
 	Events         event.Publisher
@@ -76,18 +75,18 @@ type RegistryDeps struct {
 	APIKey         string
 }
 
-// Registry adapts host tools to Eino: every invocation persists a ToolCall
-// row, emits lifecycle events, enforces the run's call budget and routes
-// sensitive side effects through the approval gate.
+// Registry 将宿主工具适配到 Eino：每次调用都会持久化一条 ToolCall 记录、
+// 发出生命周期事件、执行本次运行的调用预算限制，
+// 并把敏感副作用路由到审批关卡。
 type Registry struct {
 	deps  RegistryDeps
 	calls atomic.Int64
 }
 
-// NewRegistry builds a registry for one run.
+// NewRegistry 为一次运行构建注册表。
 func NewRegistry(deps RegistryDeps) *Registry { return &Registry{deps: deps} }
 
-// Tools assembles the seven agent tools bound to one workspace directory.
+// Tools 组装绑定到单个工作区目录的七个 agent 工具。
 func (r *Registry) Tools(
 	files *workspace.FileStore, shell ShellConfig, dir string, secrets []string,
 ) ([]tool.BaseTool, error) {
@@ -102,9 +101,8 @@ func (r *Registry) Tools(
 	return append(built, shellTool), nil
 }
 
-// toolOutcome is what a tool function reports back to the registry. Read-only
-// tools fill observation directly; sensitive tools fill payload plus apply,
-// which only runs after the approval gate grants the call.
+// toolOutcome 是工具函数向注册表回报的结果。只读工具直接填写 observation；
+// 敏感工具填写 payload 和 apply，apply 只有在审批关卡放行该调用后才会执行。
 type toolOutcome struct {
 	payload     map[string]any
 	apply       func(context.Context) (toolOutcome, error)
@@ -182,8 +180,8 @@ func (r *Registry) guarded(
 	return r.finalize(ctx, callID, name, applied)
 }
 
-// recordRejected stores only the observation; the approval service already
-// moved the ToolCall row to rejected with a finished timestamp.
+// recordRejected 只存储 observation；审批服务已将 ToolCall 记录
+// 置为 rejected 并写入完成时间戳。
 func (r *Registry) recordRejected(
 	ctx context.Context, callID uuid.UUID, name string,
 ) (string, error) {
@@ -271,8 +269,8 @@ func (r *Registry) appendEvent(ctx context.Context, eventType string, payload an
 	return nil
 }
 
-// truncate caps raw payloads before they are embedded into observation JSON,
-// keeping the stored jsonb document valid while bounding the model's input.
+// truncate 在原始负载嵌入 observation JSON 之前对其限长，
+// 在限制模型输入的同时保证存储的 jsonb 文档有效。
 func (r *Registry) truncate(text string) string {
 	if r.deps.MaxOutputBytes > noOutputLimit && len(text) > r.deps.MaxOutputBytes {
 		return text[:r.deps.MaxOutputBytes]
@@ -280,9 +278,9 @@ func (r *Registry) truncate(text string) string {
 	return text
 }
 
-// cappedList shrinks a list payload from the tail until its marshaled
-// observation fits MaxOutputBytes, flagging truncation. It never byte-cuts the
-// final JSON (Ruling 3), so the stored jsonb document stays valid.
+// cappedList 从尾部收缩列表负载，直到其序列化后的 observation
+// 不超过 MaxOutputBytes，并标记截断。它绝不对最终 JSON 做字节级截断
+// （Ruling 3），因此存储的 jsonb 文档始终有效。
 func cappedList[T any](r *Registry, key string, items []T) map[string]any {
 	payload := map[string]any{key: items}
 	if r.deps.MaxOutputBytes <= noOutputLimit ||
@@ -298,8 +296,8 @@ func cappedList[T any](r *Registry, key string, items []T) map[string]any {
 	return payload
 }
 
-// jsonbSafe rewrites the escaped NUL sequence to the escaped replacement
-// character: PostgreSQL jsonb rejects NUL escapes in stored documents.
+// jsonbSafe 将转义的 NUL 序列改写为转义的替换字符：
+// PostgreSQL jsonb 拒绝存储文档中的 NUL 转义。
 func jsonbSafe(data []byte) []byte {
 	return bytes.ReplaceAll(data, []byte("\\u0000"), []byte("\\ufffd"))
 }

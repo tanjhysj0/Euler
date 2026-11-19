@@ -9,17 +9,17 @@ import (
 	"euler/internal/api"
 )
 
-// Handler serves the model profile HTTP endpoints.
+// Handler 提供模型配置的 HTTP 接口。
 type Handler struct {
 	service *Service
 }
 
-// NewHandler builds a Handler backed by service.
+// NewHandler 构建由 service 支撑的 Handler。
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
 }
 
-// Register mounts the model profile routes on an authenticated API group.
+// Register 将模型配置路由挂载到经过认证的 API 分组上。
 func (h *Handler) Register(group *gin.RouterGroup) {
 	group.GET("/model-profiles", h.list)
 	group.POST("/model-profiles", h.create)

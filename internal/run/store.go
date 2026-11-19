@@ -14,25 +14,24 @@ import (
 	"euler/internal/persistence"
 )
 
-// HealthChecker reports whether the backing database answers requests.
+// HealthChecker 报告后端数据库是否能响应请求。
 type HealthChecker interface {
 	Ping(ctx context.Context) error
 }
 
-// Store persists runs, messages, approvals and tool state transitions.
+// Store 持久化 run、消息、审批以及工具状态迁移。
 type Store struct {
 	db      *gorm.DB
 	events  *event.Store
 	checker HealthChecker
 }
 
-// NewStore builds a Store that appends run events through events.
+// NewStore 构建一个通过 events 追加 run 事件的 Store。
 func NewStore(db *gorm.DB, events *event.Store, checker HealthChecker) *Store {
 	return &Store{db: db, events: events, checker: checker}
 }
 
-// Get returns the run together with its tool calls, approvals and last event
-// sequence.
+// Get 返回 run 及其工具调用、审批和最后的事件序号。
 func (s *Store) Get(ctx context.Context, runID uuid.UUID) (Snapshot, error) {
 	var row persistence.Run
 	err := s.db.WithContext(ctx).First(&row, "id = ?", runID).Error
@@ -62,7 +61,7 @@ func (s *Store) Get(ctx context.Context, runID uuid.UUID) (Snapshot, error) {
 	}, nil
 }
 
-// Exists reports whether runID is a known run.
+// Exists 报告 runID 是否是一个已存在的 run。
 func (s *Store) Exists(ctx context.Context, runID uuid.UUID) (bool, error) {
 	var count int64
 	err := s.db.WithContext(ctx).Model(&persistence.Run{}).
@@ -73,9 +72,9 @@ func (s *Store) Exists(ctx context.Context, runID uuid.UUID) (bool, error) {
 	return count > zeroCount, nil
 }
 
-// MarkRunning moves a queued run to running and commits run.started and
-// message.started in the same transaction. A run that is no longer queued
-// reports false so the worker publishes nothing.
+// MarkRunning 将处于 queued 状态的 run 迁移到 running，并在同一事务中提交
+// run.started 和 message.started 事件。若 run 已不处于 queued 状态则返回
+// false，worker 便不会发布任何事件。
 func (s *Store) MarkRunning(ctx context.Context, request Request) (bool, error) {
 	var startedEvent, messageEvent event.Event
 	started := false
@@ -124,19 +123,17 @@ func (s *Store) MarkRunning(ctx context.Context, request Request) (bool, error) 
 	return started, nil
 }
 
-// StatusChange names one guarded transition between non-terminal run statuses.
+// StatusChange 描述非终态 run 状态之间一次受校验的状态迁移。
 type StatusChange struct {
 	RunID uuid.UUID
 	From  string
 	To    string
 }
 
-// SetStatusTx moves a run between two non-terminal statuses inside a
-// transaction the caller owns and reports whether the row changed. Approval
-// flows bind the run status, the tool call status and their event into one
-// atomic write through this function, so the caller's own event stays the
-// single observable record of the transition. Locking the run first keeps the
-// row lock order identical to Finish and Cancel; the context travels with tx.
+// SetStatusTx 在调用方持有的事务内将 run 在两个非终态状态之间迁移，并报告
+// 该行是否发生变化。审批流程通过此函数将 run 状态、工具调用状态及其事件
+// 绑定为一次原子写入，使调用方自己的事件成为该次迁移唯一可观察的记录。
+// 先锁定 run 行可保持与 Finish 和 Cancel 一致的行锁顺序；context 随 tx 传递。
 func SetStatusTx(tx *gorm.DB, change StatusChange) (bool, error) {
 	row, err := lockRun(tx, change.RunID)
 	if err != nil {
@@ -157,7 +154,7 @@ func SetStatusTx(tx *gorm.DB, change StatusChange) (bool, error) {
 	return true, nil
 }
 
-// FinishInput describes one terminal transition.
+// FinishInput 描述一次终态迁移。
 type FinishInput struct {
 	RunID         uuid.UUID
 	Status        string
@@ -166,9 +163,8 @@ type FinishInput struct {
 	EventType     string
 }
 
-// Finish applies a terminal transition and writes its event in the same
-// transaction. Repeating the same terminal state is idempotent and does not
-// write an event.
+// Finish 应用一次终态迁移，并在同一事务中写入对应事件。重复进入相同的
+// 终态是幂等的，不会再写入事件。
 func (s *Store) Finish(ctx context.Context, input FinishInput) error {
 	payload := map[string]any{}
 	if input.ErrorCode != "" {
@@ -220,9 +216,9 @@ func applyTerminal(tx *gorm.DB, input FinishInput) error {
 	return finishRelated(tx, input.RunID, input.MessageStatus, now)
 }
 
-// Cancel moves an active run to cancelled, cancels its streaming message,
-// pending approvals and active tool calls. Repeating Cancel returns the latest
-// snapshot without publishing a second run.cancelled event.
+// Cancel 将活跃的 run 迁移为 cancelled，同时取消其流式消息、待处理审批和
+// 活跃的工具调用。重复调用 Cancel 会返回最新快照，而不会再次发布
+// run.cancelled 事件。
 func (s *Store) Cancel(ctx context.Context, runID uuid.UUID) (Snapshot, error) {
 	err := s.Finish(ctx, FinishInput{
 		RunID:         runID,
@@ -236,8 +232,8 @@ func (s *Store) Cancel(ctx context.Context, runID uuid.UUID) (Snapshot, error) {
 	return s.Get(ctx, runID)
 }
 
-// Interrupt repairs one active run as interrupted without using the normal
-// state machine. It is reserved for shutdown and startup recovery.
+// Interrupt 绕过正常状态机，将一个活跃 run 修复为 interrupted。它仅用于
+// 关闭和启动恢复流程。
 func (s *Store) Interrupt(ctx context.Context, runID uuid.UUID) error {
 	var stored event.Event
 	changed := false
@@ -274,8 +270,8 @@ func (s *Store) Interrupt(ctx context.Context, runID uuid.UUID) error {
 	return nil
 }
 
-// RecoverInterrupted repairs every queued, running or waiting_approval run as
-// interrupted. It is called once during startup, before serving requests.
+// RecoverInterrupted 将所有处于 queued、running 或 waiting_approval 状态的
+// run 修复为 interrupted。它在启动阶段、开始处理请求之前被调用一次。
 func (s *Store) RecoverInterrupted(ctx context.Context) error {
 	var runIDs []uuid.UUID
 	err := s.db.WithContext(ctx).Model(&persistence.Run{}).

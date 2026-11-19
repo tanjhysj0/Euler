@@ -9,36 +9,36 @@ import (
 	"euler/internal/persistence"
 )
 
-// Repository persists model profiles. It never sees or stores API keys.
+// Repository 持久化模型配置。它从不接触或存储 API key。
 type Repository interface {
 	Create(ctx context.Context, profile persistence.ModelProfile) error
 	List(ctx context.Context) ([]persistence.ModelProfile, error)
 	Get(ctx context.Context, id uuid.UUID) (persistence.ModelProfile, error)
 }
 
-// GormRepository stores model profiles in PostgreSQL.
+// GormRepository 将模型配置存储在 PostgreSQL 中。
 type GormRepository struct {
 	db *gorm.DB
 }
 
-// NewGormRepository adapts db to Repository.
+// NewGormRepository 将 db 适配为 Repository。
 func NewGormRepository(db *gorm.DB) *GormRepository {
 	return &GormRepository{db: db}
 }
 
-// Create inserts a model profile row.
+// Create 插入一条模型配置记录。
 func (r *GormRepository) Create(ctx context.Context, profile persistence.ModelProfile) error {
 	return r.db.WithContext(ctx).Create(&profile).Error
 }
 
-// List returns all model profiles ordered by creation time.
+// List 返回按创建时间排序的所有模型配置。
 func (r *GormRepository) List(ctx context.Context) ([]persistence.ModelProfile, error) {
 	var profiles []persistence.ModelProfile
 	err := r.db.WithContext(ctx).Order("created_at").Find(&profiles).Error
 	return profiles, err
 }
 
-// Get loads a single model profile by ID.
+// Get 按 ID 加载单条模型配置。
 func (r *GormRepository) Get(ctx context.Context, id uuid.UUID) (persistence.ModelProfile, error) {
 	var profile persistence.ModelProfile
 	err := r.db.WithContext(ctx).First(&profile, "id = ?", id).Error

@@ -36,8 +36,8 @@ func TestRuntimeStreamsTextBeforeToolCall(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(fixture.dir, "note.txt"), []byte("你好"), 0o600))
 	index := 0
-	// OpenAI declares tool_calls in the first non-empty delta; text and the
-	// tool call arrive in the same chunk.
+	// OpenAI 在第一个非空 delta 中声明 tool_calls；文本和工具调用
+	// 会在同一个 chunk 中到达。
 	chatModel := &fakeReactModel{rounds: [][]*schema.Message{
 		{
 			{Role: schema.Assistant, Content: "先检查", ToolCalls: []schema.ToolCall{{
@@ -70,8 +70,8 @@ func TestRuntimeStreamsTextBeforeToolCall(t *testing.T) {
 	require.Contains(t, deltas[0]["delta"], "先检查")
 }
 
-// TestRuntimeStreamsSlowTextBeforeEOF requires message.delta events while the
-// model stream is still open; a checker that waits for EOF stalls slow streams.
+// TestRuntimeStreamsSlowTextBeforeEOF 要求在模型 stream 尚未关闭时就能收到
+// message.delta 事件；等待 EOF 才检查的做法会让慢速 stream 卡住。
 func TestRuntimeStreamsSlowTextBeforeEOF(t *testing.T) {
 	fixture := newRuntimeFixture(t)
 	release := make(chan struct{})
@@ -93,7 +93,7 @@ func TestRuntimeStreamsSlowTextBeforeEOF(t *testing.T) {
 	require.NoError(t, <-errCh)
 }
 
-// slowFakeModel emits small chunks like a slow OpenAI SSE stream, then holds until release.
+// slowFakeModel 像慢速的 OpenAI SSE stream 一样发送小 chunk，然后阻塞直到 release。
 type slowFakeModel struct{ release chan struct{} }
 
 func (m *slowFakeModel) Stream(
@@ -150,9 +150,9 @@ func TestRuntimeCancelStopsModel(t *testing.T) {
 	}
 }
 
-// TestConsumeRoundMapsStreamError feeds the future-path consumer a raw model
-// stream error (the shape acl hands to MessageFuture before retryModel wraps
-// the graph-side reader) and requires a coded, redacted error back.
+// TestConsumeRoundMapsStreamError 向 future 路径的消费者注入原始的模型
+// stream 错误（即 retryModel 包装图侧 reader 之前 acl 交给 MessageFuture 的
+// 错误形态），并要求返回带错误码且已脱敏的错误。
 func TestConsumeRoundMapsStreamError(t *testing.T) {
 	fixture := newRuntimeFixture(t)
 	writer := newDeltaWriter(fixture.deps(t, nil), fixture.request, "sk-stream-test")
@@ -350,8 +350,8 @@ func openAgentTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// deleteAgentFixtures removes only rows owned by one fixture workspace, in
-// foreign-key order, never truncating shared tables.
+// deleteAgentFixtures 只删除属于单个 fixture 工作区的行，按外键顺序删除，
+// 绝不清空共享表。
 func deleteAgentFixtures(t *testing.T, db *gorm.DB, workspaceID, profileID uuid.UUID) {
 	t.Helper()
 	var sessionIDs []uuid.UUID

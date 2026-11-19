@@ -240,7 +240,7 @@ func newManagerFixture(t *testing.T) *managerFixture {
 	store := NewStore(db, events, nil)
 	runner := newFakeRunner()
 	manager := NewManager(store, runner, Limits{MaxDuration: 10 * time.Second})
-	// Registered after the session cleanups, so workers stop before rows go.
+	// 在会话清理之后注册，确保 worker 先停止再删除数据行。
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -318,8 +318,8 @@ func newRunSession(t *testing.T, db *gorm.DB) uuid.UUID {
 	return session.ID
 }
 
-// deleteRunFixtures removes only rows owned by one fixture workspace. Deletion
-// follows the foreign-key order and never truncates shared tables.
+// deleteRunFixtures 只删除属于单个测试工作区的数据行。删除遵循外键顺序，
+// 绝不清空共享表。
 func deleteRunFixtures(t *testing.T, db *gorm.DB, workspaceID, profileID uuid.UUID) {
 	t.Helper()
 	var sessionIDs []uuid.UUID

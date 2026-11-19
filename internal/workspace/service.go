@@ -1,5 +1,5 @@
-// Package workspace validates workspace directories and browses local
-// directories without reading file contents.
+// Package workspace 校验工作区目录，并在不读取文件内容的前提下
+// 浏览本地目录。
 package workspace
 
 import (
@@ -19,22 +19,22 @@ const (
 )
 
 var (
-	// ErrInvalidPath marks a path that is not an accessible absolute directory.
+	// ErrInvalidPath 表示路径不是可访问的绝对目录。
 	ErrInvalidPath = errors.New("invalid path")
 )
 
-// Service resolves workspace directories for sessions.
+// Service 为会话解析工作区目录。
 type Service struct {
 	root string
 }
 
-// NewService builds a Service that creates default workspaces under root.
+// NewService 构建一个在 root 下创建默认工作区的 Service。
 func NewService(root string) *Service {
 	return &Service{root: root}
 }
 
-// NormalizeExisting resolves path to a clean absolute directory that this
-// process can read and write. Symlinks are resolved before the checks.
+// NormalizeExisting 将 path 解析为本进程可读写的规范绝对目录。
+// 各项检查之前会先解析 symlink。
 func (*Service) NormalizeExisting(path string) (string, error) {
 	if path == emptyPath || !filepath.IsAbs(path) {
 		return emptyPath, fmt.Errorf("%w: path must be absolute", ErrInvalidPath)
@@ -56,8 +56,8 @@ func (*Service) NormalizeExisting(path string) (string, error) {
 	return resolved, nil
 }
 
-// CreateDefault creates a 0700 directory named after sessionID under the
-// service root and returns its normalized absolute path.
+// CreateDefault 在服务根目录下创建以 sessionID 命名的 0700 目录，
+// 并返回其规范化的绝对路径。
 func (s *Service) CreateDefault(sessionID uuid.UUID) (string, bool, error) {
 	root, err := filepath.Abs(s.root)
 	if err != nil {
@@ -77,8 +77,8 @@ func (s *Service) CreateDefault(sessionID uuid.UUID) (string, bool, error) {
 	return resolved, true, nil
 }
 
-// CleanupCreated removes a directory created by CreateDefault. It only runs
-// for created paths and never recurses, so user data is left untouched.
+// CleanupCreated 删除由 CreateDefault 创建的目录。它只对本次创建的
+// 路径执行且绝不递归删除，因此不会触碰用户数据。
 func (*Service) CleanupCreated(path string, created bool) error {
 	switch created {
 	case true:
@@ -96,21 +96,21 @@ func removeEmptyDirectory(path string) error {
 	return nil
 }
 
-// Directory is one named subdirectory in a listing.
+// Directory 表示目录列表中的一个具名子目录。
 type Directory struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
 }
 
-// Listing describes a browsable directory and its direct subdirectories.
+// Listing 描述一个可浏览目录及其直接子目录。
 type Listing struct {
 	CurrentPath string      `json:"current_path"`
 	ParentPath  *string     `json:"parent_path"`
 	Directories []Directory `json:"directories"`
 }
 
-// Browse lists the direct subdirectories of path without reading file
-// contents. An empty path defaults to the user home directory.
+// Browse 在不读取文件内容的前提下列出 path 的直接子目录。
+// 空路径默认使用用户主目录。
 func Browse(path string) (Listing, error) {
 	current, err := resolveBrowsePath(path)
 	if err != nil {

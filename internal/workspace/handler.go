@@ -22,21 +22,21 @@ const (
 	codePathOutside    = "path_outside_workspace"
 	codeFileTooLarge   = "file_too_large"
 	codeInternalError  = "internal_error"
-	// sniffLength is the prefix length fed to http.DetectContentType.
+	// sniffLength 是传给 http.DetectContentType 的前缀长度。
 	sniffLength = 512
-	// decimalBase is the radix used for Content-Length values.
+	// decimalBase 是 Content-Length 数值使用的进制。
 	decimalBase = 10
 )
 
-// Handler serves the workspace directory browsing endpoints.
+// Handler 提供工作区目录浏览相关的接口。
 type Handler struct{}
 
-// NewHandler builds a Handler for directory browsing.
+// NewHandler 构建用于目录浏览的 Handler。
 func NewHandler() *Handler {
 	return &Handler{}
 }
 
-// Register mounts the directory browser routes on an authenticated API group.
+// Register 将目录浏览路由挂载到需要鉴权的 API 分组上。
 func (*Handler) Register(group *gin.RouterGroup) {
 	group.GET("/fs/directories", listDirectories)
 }
@@ -50,26 +50,25 @@ func listDirectories(c *gin.Context) {
 	c.JSON(http.StatusOK, listing)
 }
 
-// FileHandler serves the workspace file tree and the preview or download of
-// workspace artifacts.
+// FileHandler 提供工作区文件树以及工作区产物的预览或下载接口。
 type FileHandler struct {
 	finder       WorkspaceFinder
 	previewBytes int
 }
 
-// NewFileHandler builds a FileHandler resolving workspaces through finder
-// and bounding previews at previewBytes.
+// NewFileHandler 构建 FileHandler，通过 finder 解析工作区，
+// 并将预览大小限制为 previewBytes。
 func NewFileHandler(finder WorkspaceFinder, previewBytes int) *FileHandler {
 	return &FileHandler{finder: finder, previewBytes: previewBytes}
 }
 
-// Register mounts the workspace artifact routes on an authenticated group.
+// Register 将工作区产物路由挂载到需要鉴权的分组上。
 func (h *FileHandler) Register(group *gin.RouterGroup) {
 	group.GET("/workspaces/:id/files", h.files)
 	group.GET("/workspaces/:id/files/content", h.content)
 }
 
-// files returns the workspace file tree capped at maxListNodes nodes.
+// files 返回工作区文件树，节点数上限为 maxListNodes。
 func (h *FileHandler) files(c *gin.Context) {
 	id, ok := parseWorkspaceID(c)
 	if !ok {
@@ -88,8 +87,8 @@ func (h *FileHandler) files(c *gin.Context) {
 	c.JSON(http.StatusOK, nodes)
 }
 
-// content previews or downloads one workspace file. Preview payloads are
-// bounded by the configured limit; downloads stream the complete file.
+// content 预览或下载单个工作区文件。预览内容受配置的大小限制约束；
+// 下载则以流式方式传输完整文件。
 func (h *FileHandler) content(c *gin.Context) {
 	id, ok := parseWorkspaceID(c)
 	if !ok {
@@ -113,7 +112,7 @@ func (h *FileHandler) content(c *gin.Context) {
 	h.preview(c, store, requested)
 }
 
-// preview writes a limited payload with a sniffed or corrected media type.
+// preview 写出受限大小的内容，并使用嗅探或修正后的媒体类型。
 func (*FileHandler) preview(c *gin.Context, store *FileStore, requested string) {
 	data, err := store.Read(c.Request.Context(), requested)
 	if err != nil {
@@ -123,7 +122,7 @@ func (*FileHandler) preview(c *gin.Context, store *FileStore, requested string) 
 	c.Data(http.StatusOK, previewContentType(requested, data), data)
 }
 
-// download streams the complete file with an attachment disposition.
+// download 以 attachment 方式流式传输完整文件。
 func (*FileHandler) download(c *gin.Context, store *FileStore, requested string) {
 	file, err := store.openReadFile(requested)
 	if err != nil {
@@ -149,8 +148,7 @@ func (*FileHandler) download(c *gin.Context, store *FileStore, requested string)
 	}
 }
 
-// extensionContentTypes corrects sniffed types for extensions with precise
-// media types.
+// extensionContentTypes 为具有精确媒体类型的扩展名修正嗅探出的类型。
 var extensionContentTypes = map[string]string{
 	".md":   "text/markdown; charset=utf-8",
 	".txt":  "text/plain; charset=utf-8",
@@ -163,8 +161,8 @@ var extensionContentTypes = map[string]string{
 	".pdf":  "application/pdf",
 }
 
-// previewContentType sniffs the first 512 bytes and corrects known text and
-// media extensions so previews render instead of downloading.
+// previewContentType 嗅探前 512 字节，并对已知的文本和媒体扩展名
+// 进行修正，使预览能够直接渲染而不是触发下载。
 func previewContentType(requested string, data []byte) string {
 	head := data
 	if len(head) > sniffLength {
@@ -176,8 +174,8 @@ func previewContentType(requested string, data []byte) string {
 	return http.DetectContentType(head)
 }
 
-// downloadContentType resolves the download Content-Type from the extension,
-// defaulting to a binary stream so unknown types are saved verbatim.
+// downloadContentType 根据扩展名确定下载的 Content-Type，
+// 默认使用二进制流类型，使未知类型按原样保存。
 func downloadContentType(requested string) string {
 	if known, ok := extensionContentTypes[filepath.Ext(requested)]; ok {
 		return known
@@ -185,8 +183,8 @@ func downloadContentType(requested string) string {
 	return "application/octet-stream"
 }
 
-// wantsDownload treats download=true as a download request; unparsable values
-// fall back to preview.
+// wantsDownload 将 download=true 视为下载请求；无法解析的值
+// 回退为预览。
 func wantsDownload(c *gin.Context) bool {
 	value, err := strconv.ParseBool(c.Query("download"))
 	return err == nil && value
@@ -201,7 +199,7 @@ func parseWorkspaceID(c *gin.Context) (uuid.UUID, bool) {
 	return id, true
 }
 
-// abortFilesError maps workspace errors onto the unified error envelope.
+// abortFilesError 将工作区错误映射为统一的错误响应结构。
 func abortFilesError(c *gin.Context, err error, fallback string) {
 	switch {
 	case errors.Is(err, ErrWorkspaceNotFound):

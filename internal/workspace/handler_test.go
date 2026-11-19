@@ -18,7 +18,7 @@ import (
 	"euler/internal/api"
 )
 
-// fakeFinder resolves a single workspace ID to a fixed directory.
+// fakeFinder 将单个工作区 ID 解析到一个固定目录。
 type fakeFinder struct {
 	id   uuid.UUID
 	path string
@@ -35,7 +35,7 @@ func (f fakeFinder) WorkspacePath(_ context.Context, id uuid.UUID) (string, erro
 	return f.path, nil
 }
 
-// newFileRouter mounts a FileHandler for finder with the given preview limit.
+// newFileRouter 以给定的预览大小限制为 finder 挂载一个 FileHandler。
 func newFileRouter(t *testing.T, finder WorkspaceFinder, previewBytes int) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)

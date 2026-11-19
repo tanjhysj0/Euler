@@ -1,4 +1,4 @@
-// Package config loads and validates the Euler runtime configuration.
+// Package config 加载并校验 Euler 的运行时配置。
 package config
 
 import (
@@ -26,7 +26,7 @@ const (
 	minAgentOutput      = 1024
 )
 
-// AgentLimits caps a single Run's model rounds, tool calls, duration and output.
+// AgentLimits 限制单次 Run 的模型轮次、工具调用次数、时长和输出。
 type AgentLimits struct {
 	MaxModelRounds int           `yaml:"max_model_rounds"`
 	MaxToolCalls   int           `yaml:"max_tool_calls"`
@@ -34,8 +34,8 @@ type AgentLimits struct {
 	MaxOutputBytes int           `yaml:"max_output_bytes"`
 }
 
-// Config is the complete runtime configuration. The database URL is read from
-// the environment only and is never serialized.
+// Config 是完整的运行时配置。数据库 URL 只从环境变量读取，
+// 绝不会被序列化。
 type Config struct {
 	Listen           string        `yaml:"listen"`
 	WorkspaceRoot    string        `yaml:"workspace_root"`
@@ -47,8 +47,8 @@ type Config struct {
 	PreviewBytes     int           `yaml:"preview_bytes"`
 }
 
-// Load reads path over the built-in defaults, fills the database URL from
-// EULER_DATABASE_URL, and validates the result. A missing file is not an error.
+// Load 在内置默认值之上读取 path 指定的文件，从 EULER_DATABASE_URL
+// 填充数据库 URL，并校验结果。文件缺失不算错误。
 func Load(path string) (Config, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

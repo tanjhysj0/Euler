@@ -14,29 +14,29 @@ import (
 )
 
 const (
-	// maxListNodes bounds the file tree returned for one workspace.
+	// maxListNodes 限制单个工作区返回的文件树节点数。
 	maxListNodes = 1000
-	// maxSearchResults bounds relative-path search matches.
+	// maxSearchResults 限制相对路径搜索的匹配数量。
 	maxSearchResults = 200
-	// emptyCapacity builds empty slices with a preset length bound.
+	// emptyCapacity 用于构建带预设长度上限的空切片。
 	emptyCapacity = 0
-	// typeDir and typeFile are the node types of the workspace file tree.
+	// typeDir 和 typeFile 是工作区文件树的节点类型。
 	typeDir  = "dir"
 	typeFile = "file"
 )
 
 var (
-	// ErrOutsideWorkspace marks paths escaping the workspace root.
+	// ErrOutsideWorkspace 标记逃逸出工作区根目录的路径。
 	ErrOutsideWorkspace = errors.New("path escapes workspace root")
-	// ErrNotFound marks workspace paths that do not exist.
+	// ErrNotFound 标记不存在的工作区路径。
 	ErrNotFound = errors.New("workspace path not found")
-	// ErrTooLarge marks files larger than the configured read limit.
+	// ErrTooLarge 标记超过配置读取上限的文件。
 	ErrTooLarge = errors.New("file exceeds the read limit")
-	// ErrNotRegularFile marks directories and other non-file targets.
+	// ErrNotRegularFile 标记目录及其他非普通文件的目标。
 	ErrNotRegularFile = errors.New("workspace path is not a regular file")
 )
 
-// FileNode is one entry of the workspace file tree.
+// FileNode 是工作区文件树中的一个条目。
 type FileNode struct {
 	Path    string    `json:"path"`
 	Type    string    `json:"type"`
@@ -44,24 +44,24 @@ type FileNode struct {
 	ModTime time.Time `json:"mod_time"`
 }
 
-// FileChange is a reviewed, not-yet-applied file mutation. Apply re-validates
-// the path at execution time so symlink swaps cannot escape the workspace.
+// FileChange 是一个已审查但尚未应用的文件变更。Apply 在执行时会重新
+// 校验路径，因此 symlink 替换无法逃逸出工作区。
 type FileChange struct {
 	Diff  string
 	Apply func(context.Context) error
 }
 
-// FileStore reads workspace files safely and pre-computes reviewed changes.
-// Write operations only materialize when FileChange.Apply runs.
+// FileStore 安全地读取工作区文件并预先计算已审查的变更。
+// 写操作只有在 FileChange.Apply 执行时才真正落盘。
 type FileStore struct {
 	root   string
 	inside string
 	limit  int
 }
 
-// NewFileStore builds a FileStore for one workspace directory. limit bounds
-// Read payloads; the root's symlink resolution is cached for containment
-// checks so a symlinked workspace root still accepts its own files.
+// NewFileStore 为一个工作区目录构建 FileStore。limit 限制 Read 返回的
+// 数据量；根目录的 symlink 解析结果会被缓存用于包含性检查，因此以
+// symlink 形式存在的工作区根目录仍能接受其自身的文件。
 func NewFileStore(root string, limit int) *FileStore {
 	inside, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -70,7 +70,7 @@ func NewFileStore(root string, limit int) *FileStore {
 	return &FileStore{root: root, inside: inside, limit: limit}
 }
 
-// Read returns at most limit bytes of a regular file inside the workspace.
+// Read 最多返回工作区内某个普通文件的 limit 个字节。
 func (s *FileStore) Read(_ context.Context, requested string) ([]byte, error) {
 	file, err := s.openReadFile(requested)
 	if err != nil {
@@ -80,8 +80,8 @@ func (s *FileStore) Read(_ context.Context, requested string) ([]byte, error) {
 	return data, errors.Join(readErr, file.Close())
 }
 
-// List returns the workspace file tree capped at maxListNodes nodes. Symbolic
-// links are listed but never followed into their targets.
+// List 返回工作区文件树，节点数上限为 maxListNodes。符号链接会被
+// 列出，但绝不跟进其目标。
 func (s *FileStore) List(_ context.Context) ([]FileNode, error) {
 	nodes := make([]FileNode, emptyCapacity, maxListNodes)
 	err := s.walk(func(rel string, entry fs.DirEntry) error {
@@ -104,7 +104,7 @@ func (s *FileStore) List(_ context.Context) ([]FileNode, error) {
 	return nodes, nil
 }
 
-// Search returns up to maxSearchResults relative paths containing query.
+// Search 返回最多 maxSearchResults 个包含 query 的相对路径。
 func (s *FileStore) Search(_ context.Context, query string) ([]string, error) {
 	matches := make([]string, emptyCapacity, maxSearchResults)
 	err := s.walk(func(rel string, _ fs.DirEntry) error {
@@ -123,8 +123,8 @@ func (s *FileStore) Search(_ context.Context, query string) ([]string, error) {
 	return matches, nil
 }
 
-// openReadFile resolves, validates and opens requested for reading. Callers
-// must close the returned file.
+// openReadFile 解析、校验并以只读方式打开 requested。调用方必须
+// 关闭返回的文件。
 func (s *FileStore) openReadFile(requested string) (*os.File, error) {
 	joined, err := s.resolve(requested)
 	if err != nil {
@@ -133,9 +133,9 @@ func (s *FileStore) openReadFile(requested string) (*os.File, error) {
 	return s.openRegular(joined)
 }
 
-// openRegular opens joined as an existing regular file inside the workspace.
-// The final open goes through openContained so a symlink swapped into place
-// after validation fails closed instead of redirecting the read.
+// openRegular 将 joined 作为工作区内已存在的普通文件打开。最终的
+// 打开通过 openContained 进行，因此校验后被替换进来的 symlink 会
+// 安全地失败，而不是重定向读取。
 func (s *FileStore) openRegular(joined string) (*os.File, error) {
 	resolved, err := s.resolveExisting(joined)
 	if err != nil {
@@ -151,12 +151,11 @@ func (s *FileStore) openRegular(joined string) (*os.File, error) {
 	return s.openContained(resolved)
 }
 
-// openContained re-opens the validated absolute path relative to the
-// symlink-resolved workspace root via os.Root. Root.Open follows symlinks but
-// never resolves a component outside the root, so races that swap the file
-// for a link or directory surface as open/stat errors instead of escapes.
-// The returned file descriptor is independent of the root handle, which is
-// therefore closed as soon as the open completes.
+// openContained 通过 os.Root 相对于 symlink 解析后的工作区根目录
+// 重新打开已校验的绝对路径。Root.Open 会跟随 symlink，但绝不会解析
+// 根目录之外的路径分量，因此把文件替换为链接或目录的竞态会表现为
+// open/stat 错误，而不是逃逸。返回的文件描述符独立于 root 句柄，
+// 因此 root 在打开完成后立即关闭。
 func (s *FileStore) openContained(resolved string) (*os.File, error) {
 	rel, err := filepath.Rel(s.inside, resolved)
 	if err != nil || isDotDotPath(rel) {
@@ -181,7 +180,7 @@ func (s *FileStore) openContained(resolved string) (*os.File, error) {
 	return nil, errors.Join(ErrNotRegularFile, statErr, file.Close())
 }
 
-// readExisting returns the full contents of requested as a regular file.
+// readExisting 以普通文件方式返回 requested 的完整内容。
 func (s *FileStore) readExisting(requested string) ([]byte, error) {
 	joined, err := s.resolve(requested)
 	if err != nil {
@@ -195,8 +194,8 @@ func (s *FileStore) readExisting(requested string) ([]byte, error) {
 	return data, errors.Join(readErr, file.Close())
 }
 
-// readLimited reads at most limit+1 bytes and fails with ErrTooLarge when the
-// source is bigger, so partial files never masquerade as complete content.
+// readLimited 最多读取 limit+1 个字节，当源文件更大时返回
+// ErrTooLarge，避免部分内容被误当成完整内容。
 func readLimited(reader io.Reader, limit int) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(reader, int64(limit)+1))
 	if err != nil {
@@ -208,10 +207,10 @@ func readLimited(reader io.Reader, limit int) ([]byte, error) {
 	return data, nil
 }
 
-// nodeVisitor receives one relative workspace path per walked entry.
+// nodeVisitor 对遍历到的每个条目接收一个工作区内的相对路径。
 type nodeVisitor func(rel string, entry fs.DirEntry) error
 
-// walk visits every entry below the root without following symlinks.
+// walk 遍历根目录下的每个条目，且不跟随 symlink。
 func (s *FileStore) walk(visitor nodeVisitor) error {
 	err := filepath.WalkDir(s.root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -235,7 +234,7 @@ func (s *FileStore) walk(visitor nodeVisitor) error {
 	return nil
 }
 
-// newFileNode builds one tree node; symlinks surface as plain files.
+// newFileNode 构建一个文件树节点；symlink 按普通文件呈现。
 func newFileNode(rel string, entry fs.DirEntry) (FileNode, error) {
 	info, err := entry.Info()
 	if err != nil {
@@ -253,13 +252,12 @@ func newFileNode(rel string, entry fs.DirEntry) (FileNode, error) {
 	}, nil
 }
 
-// resolve validates requested and returns its absolute path inside the
-// workspace: absolute paths and paths still containing ".." after cleaning
-// are rejected, and filepath.Rel re-verifies the joined result. securejoin is
-// deliberately not used here: its chroot clamping always re-anchors symlink
-// targets inside the root, so its return value carries no escape signal, and
-// consuming it would erase the link paths that checkWriteTarget, regularTarget
-// and resolveExisting must Lstat to detect symlinked targets at open time.
+// resolve 校验 requested 并返回其位于工作区内的绝对路径：绝对路径
+// 以及清理后仍包含 ".." 的路径都会被拒绝，并用 filepath.Rel 再次核验
+// 拼接结果。这里刻意不使用 securejoin：它的 chroot 钳制总是把 symlink
+// 目标重新锚定到根目录内，因此其返回值不携带任何逃逸信号，而且采用它
+// 会抹掉链接路径本身——checkWriteTarget、regularTarget 和 resolveExisting
+// 必须对这些路径执行 Lstat，才能在打开时检测出 symlink 目标。
 func (s *FileStore) resolve(requested string) (string, error) {
 	if filepath.IsAbs(requested) {
 		return emptyPath, ErrOutsideWorkspace
@@ -276,8 +274,8 @@ func (s *FileStore) resolve(requested string) (string, error) {
 	return joined, nil
 }
 
-// resolveExisting re-resolves symlinks for an existing path and requires the
-// result to stay inside the workspace root.
+// resolveExisting 对已存在的路径重新解析 symlink，并要求解析结果
+// 仍位于工作区根目录内。
 func (s *FileStore) resolveExisting(joined string) (string, error) {
 	resolved, err := filepath.EvalSymlinks(joined)
 	if err != nil {
@@ -289,7 +287,7 @@ func (s *FileStore) resolveExisting(joined string) (string, error) {
 	return resolved, nil
 }
 
-// ensureInside requires abs to stay inside the symlink-resolved root.
+// ensureInside 要求 abs 位于 symlink 解析后的根目录之内。
 func (s *FileStore) ensureInside(abs string) error {
 	rel, err := filepath.Rel(s.inside, abs)
 	if err != nil {
@@ -301,7 +299,7 @@ func (s *FileStore) ensureInside(abs string) error {
 	return nil
 }
 
-// isDotDotPath reports whether a cleaned path escapes through a parent link.
+// isDotDotPath 判断清理后的路径是否通过父目录引用向外逃逸。
 func isDotDotPath(cleaned string) bool {
 	return cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator))
 }

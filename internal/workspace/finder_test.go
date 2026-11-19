@@ -17,8 +17,8 @@ import (
 
 const testDatabaseURLEnv = "TEST_DATABASE_URL"
 
-// newFinderTestDB opens the test database inside a transaction that is rolled
-// back during cleanup, so fixtures never outlive the test.
+// newFinderTestDB 在一个事务中打开测试数据库，该事务会在清理阶段
+// 回滚，因此测试数据绝不会残留到测试之外。
 func newFinderTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	databaseURL := os.Getenv(testDatabaseURLEnv)

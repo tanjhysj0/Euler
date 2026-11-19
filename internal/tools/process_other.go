@@ -4,7 +4,6 @@ package tools
 
 import "os/exec"
 
-// configureProcessGroup has no adapter outside macOS: a command whose children
-// cannot be killed together with it is refused instead of started, which keeps
-// the platform boundary explicit.
+// configureProcessGroup 在 macOS 之外没有适配器：若命令的子进程
+// 无法与其一并杀死，则拒绝执行而不是启动，从而明确平台边界。
 func configureProcessGroup(*exec.Cmd) error { return ErrUnsupportedPlatform }

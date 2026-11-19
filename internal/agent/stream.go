@@ -18,16 +18,16 @@ import (
 	"euler/internal/run"
 )
 
-// deltaBatchRunes flushes assistant text once this many UTF-8 runes have
-// accumulated, or when the current model stream ends.
+// deltaBatchRunes：累计达到这么多 UTF-8 rune，或当前模型 stream 结束时，
+// 就 flush 一次助手文本。
 const (
 	deltaBatchRunes = 128
 	emptyPending    = 0
 	emptyContent    = ""
 )
 
-// deltaWriter batches assistant text into the streaming message row and
-// message.delta events. Only the future consumer goroutine touches it.
+// deltaWriter 将助手文本批量写入流式消息行和 message.delta 事件。
+// 只有 future 消费者 goroutine 会访问它。
 type deltaWriter struct {
 	db        *gorm.DB
 	events    event.Publisher
@@ -54,8 +54,8 @@ func (w *deltaWriter) add(ctx context.Context, content string) error {
 	return nil
 }
 
-// flush updates the message row first, then appends the event, so replay and
-// live subscribers never see a delta without its stored prefix.
+// flush 先更新消息行，再追加事件，确保回放和实时订阅者绝不会看到
+// 缺少已存储前缀的 delta。
 func (w *deltaWriter) flush(ctx context.Context) error {
 	if len(w.pending) == emptyPending {
 		return nil
@@ -77,8 +77,8 @@ func (w *deltaWriter) flush(ctx context.Context) error {
 	return nil
 }
 
-// consumeFuture walks every per-round model stream; assistant text is written
-// incrementally while tool role messages are drained without display.
+// consumeFuture 遍历每一轮的模型 stream；助手文本增量写入，
+// 而 tool 角色的消息只消费不展示。
 func consumeFuture(
 	ctx context.Context, future react.MessageFuture, writer *deltaWriter,
 ) error {

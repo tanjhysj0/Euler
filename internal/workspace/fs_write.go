@@ -13,30 +13,30 @@ import (
 )
 
 const (
-	// writeDirPermission matches the private 0700 mode of workspace roots so
-	// directories created while writing stay unreadable by other users.
+	// writeDirPermission 与工作区根目录的私有 0700 权限保持一致，
+	// 使写入过程中创建的目录对其他用户不可读。
 	writeDirPermission = 0o700
-	// tempFilePrefix marks in-progress writes; temp files already use 0600.
+	// tempFilePrefix 标记正在进行中的写入；临时文件本身已使用 0600 权限。
 	tempFilePrefix = ".euler-write-"
-	// diffContextLines keeps unified diffs compact but reviewable.
+	// diffContextLines 让 unified diff 保持紧凑但仍便于审阅。
 	diffContextLines = 3
-	// emptyString is the zero byte slice bound for patch validation.
+	// emptyString 是补丁校验时的零长度字节切片边界。
 	emptyString = ""
-	// firstValidIndex is the smallest index bytes.Index can report for a match.
+	// firstValidIndex 是 bytes.Index 匹配成功时可能返回的最小下标。
 	firstValidIndex = 0
 )
 
 var (
-	// ErrPatchAmbiguous marks old strings that do not occur exactly once.
+	// ErrPatchAmbiguous 表示旧字符串并非恰好出现一次。
 	ErrPatchAmbiguous = errors.New("old string must appear exactly once")
-	// ErrNotDeletable marks delete targets that are not regular files.
+	// ErrNotDeletable 表示删除目标不是普通文件。
 	ErrNotDeletable = errors.New("workspace path is not a deletable file")
-	// errDeleteStillPresent guards against deletes that silently no-op.
+	// errDeleteStillPresent 用于防范删除操作悄无声息地未生效。
 	errDeleteStillPresent = errors.New("verify deletion: path still exists")
 )
 
-// PrepareWrite computes the diff of writing content to requested without
-// touching the filesystem yet.
+// PrepareWrite 计算将 content 写入 requested 的 diff，
+// 此时尚不触碰文件系统。
 func (s *FileStore) PrepareWrite(
 	_ context.Context, requested string, content []byte,
 ) (FileChange, error) {
@@ -60,8 +60,8 @@ func (s *FileStore) PrepareWrite(
 	}}, nil
 }
 
-// PreparePatch computes the diff of replacing the single occurrence of
-// oldString in requested with newString without touching the filesystem.
+// PreparePatch 计算将 requested 中唯一出现的 oldString 替换为 newString
+// 的 diff，不触碰文件系统。
 func (s *FileStore) PreparePatch(
 	_ context.Context, requested, oldString, newString string,
 ) (FileChange, error) {
@@ -82,8 +82,8 @@ func (s *FileStore) PreparePatch(
 	}}, nil
 }
 
-// Delete computes a FileChange removing requested. Only regular files inside
-// the workspace can be deleted.
+// Delete 计算一个删除 requested 的 FileChange。只有工作区内的
+// 普通文件才能被删除。
 func (s *FileStore) Delete(_ context.Context, requested string) (FileChange, error) {
 	if err := s.regularTarget(requested); err != nil {
 		return FileChange{}, err
@@ -96,9 +96,9 @@ func (s *FileStore) Delete(_ context.Context, requested string) (FileChange, err
 	}, nil
 }
 
-// checkWriteTarget rejects symlinked or non-regular write targets. Symlink
-// targets pointing outside the workspace surface as ErrOutsideWorkspace so a
-// swapped link can never redirect a write.
+// checkWriteTarget 拒绝 symlink 或非常规文件的写入目标。指向工作区之外的
+// symlink 目标会以 ErrOutsideWorkspace 报错，因此被调换的链接
+// 永远无法把写入重定向到别处。
 func (s *FileStore) checkWriteTarget(joined string) error {
 	info, err := os.Lstat(joined)
 	if err != nil {
@@ -119,8 +119,8 @@ func (s *FileStore) checkWriteTarget(joined string) error {
 	return nil
 }
 
-// applyWrite re-validates requested and writes content with a temporary file
-// plus rename at 0600 permissions.
+// applyWrite 重新校验 requested，并通过临时文件加 rename 的方式
+// 以 0600 权限写入 content。
 func (s *FileStore) applyWrite(requested string, content []byte) error {
 	joined, err := s.resolve(requested)
 	if err != nil {
@@ -135,8 +135,8 @@ func (s *FileStore) applyWrite(requested string, content []byte) error {
 	return writeFileAtomic(joined, content)
 }
 
-// ensureWritableDir validates the nearest existing ancestor stays inside the
-// workspace and creates missing parent directories.
+// ensureWritableDir 校验最近的已存在祖先目录仍位于工作区内，
+// 并创建缺失的父目录。
 func (s *FileStore) ensureWritableDir(joined string) error {
 	dir := filepath.Dir(joined)
 	if err := s.validateAncestor(dir); err != nil {
@@ -152,8 +152,8 @@ func (s *FileStore) ensureWritableDir(joined string) error {
 	return s.ensureInside(resolved)
 }
 
-// validateAncestor walks up from dir to the nearest existing ancestor and
-// requires its symlink resolution to stay inside the workspace.
+// validateAncestor 从 dir 逐级向上找到最近的已存在祖先目录，
+// 并要求其 symlink 解析结果仍位于工作区内。
 func (s *FileStore) validateAncestor(dir string) error {
 	for dir != s.root {
 		resolved, err := filepath.EvalSymlinks(dir)
@@ -168,8 +168,8 @@ func (s *FileStore) validateAncestor(dir string) error {
 	return nil
 }
 
-// writeFileAtomic writes content next to joined using a temporary file and
-// rename, keeping 0600 permissions from the temporary file.
+// writeFileAtomic 通过临时文件加 rename 的方式把 content 写到 joined
+// 所在位置，并保留临时文件的 0600 权限。
 func writeFileAtomic(joined string, content []byte) error {
 	temp, err := os.CreateTemp(filepath.Dir(joined), tempFilePrefix)
 	if err != nil {
@@ -189,15 +189,15 @@ func writeFileAtomic(joined string, content []byte) error {
 	return nil
 }
 
-// discardTemp closes and removes a failed temporary file, keeping the cause.
+// discardTemp 关闭并删除写入失败的临时文件，同时保留原始错误原因。
 func discardTemp(temp *os.File, name string, cause error) error {
 	closeErr := temp.Close()
 	removeErr := os.Remove(name)
 	return errors.Join(cause, closeErr, removeErr)
 }
 
-// patchedContent returns the patched file contents, requiring oldString to
-// occur exactly once in the current file.
+// patchedContent 返回打补丁后的文件内容，要求 oldString 在当前文件中
+// 恰好出现一次。
 func (s *FileStore) patchedContent(requested, oldString, newString string) ([]byte, error) {
 	if oldString == emptyString {
 		return nil, ErrPatchAmbiguous
@@ -213,8 +213,8 @@ func (s *FileStore) patchedContent(requested, oldString, newString string) ([]by
 	return updated, nil
 }
 
-// applyPatch re-reads the file, re-verifies oldString occurs exactly once and
-// writes the patched content atomically.
+// applyPatch 重新读取文件，再次确认 oldString 恰好出现一次，
+// 然后原子地写入打补丁后的内容。
 func (s *FileStore) applyPatch(requested, oldString, newString string) error {
 	updated, err := s.patchedContent(requested, oldString, newString)
 	if err != nil {
@@ -223,8 +223,8 @@ func (s *FileStore) applyPatch(requested, oldString, newString string) error {
 	return s.applyWrite(requested, updated)
 }
 
-// regularTarget stats requested and requires an existing regular file, so
-// symlink escapes fail before delete type checks.
+// regularTarget 对 requested 执行 stat 并要求其为已存在的普通文件，
+// 使 symlink 逃逸在删除类型检查之前就失败。
 func (s *FileStore) regularTarget(requested string) error {
 	joined, err := s.resolve(requested)
 	if err != nil {
@@ -244,8 +244,8 @@ func (s *FileStore) regularTarget(requested string) error {
 	return nil
 }
 
-// applyDelete re-validates requested, removes the file and re-checks the
-// path so races cannot silently no-op.
+// applyDelete 重新校验 requested，删除文件后再次检查该路径，
+// 防止竞态导致删除悄无声息地未生效。
 func (s *FileStore) applyDelete(requested string) error {
 	if err := s.regularTarget(requested); err != nil {
 		return err
@@ -265,8 +265,8 @@ func (s *FileStore) applyDelete(requested string) error {
 	return nil
 }
 
-// replaceOnce replaces a single occurrence of old and reports whether old
-// occurred exactly once.
+// replaceOnce 替换 old 的唯一一次出现，并报告 old 是否
+// 恰好出现了一次。
 func replaceOnce(content, old, replacement []byte) ([]byte, bool) {
 	index := bytes.Index(content, old)
 	if index < firstValidIndex || bytes.Contains(content[index+len(old):], old) {
@@ -279,8 +279,8 @@ func replaceOnce(content, old, replacement []byte) ([]byte, bool) {
 	return updated, true
 }
 
-// renderDiff renders a unified diff between before and after contents; new
-// files diff from an empty source.
+// renderDiff 渲染 before 与 after 内容之间的 unified diff；
+// 新文件以空内容作为 diff 源。
 func renderDiff(path string, before, after []byte) (string, error) {
 	fromFile := "a/" + path
 	if len(before) == emptyCapacity {
@@ -300,8 +300,8 @@ func renderDiff(path string, before, after []byte) (string, error) {
 	return buf.String(), nil
 }
 
-// splitDiffLines splits diff input; empty content yields no lines so new
-// files render as pure additions.
+// splitDiffLines 拆分 diff 输入；空内容不产生任何行，
+// 使新文件渲染为纯新增。
 func splitDiffLines(content []byte) []string {
 	if len(content) == emptyCapacity {
 		return nil

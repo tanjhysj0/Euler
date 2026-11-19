@@ -8,13 +8,12 @@ import (
 	"time"
 )
 
-// processWaitDelay is how long the parent waits for stragglers after the
-// process group has been sent SIGKILL.
+// processWaitDelay 是向进程组发送 SIGKILL 后，
+// 父进程等待残余进程退出的时长。
 const processWaitDelay = 2 * time.Second
 
-// configureProcessGroup runs the shell in its own process group and answers an
-// interrupted command by killing that whole group, so background children
-// cannot outlive a cancelled or timed-out command.
+// configureProcessGroup 让 shell 在独立的进程组中运行，命令被中断时
+// 杀死整个进程组，使后台子进程无法在被取消或超时的命令之后存活。
 func configureProcessGroup(cmd *exec.Cmd) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {

@@ -19,14 +19,13 @@ const (
 	defaultQueryInt    = 0
 )
 
-// WorkspaceView is the workspace attached to a session.
+// WorkspaceView 是会话所关联的工作区。
 type WorkspaceView struct {
 	ID   uuid.UUID `json:"id"`
 	Path string    `json:"path"`
 }
 
-// ModelView is the model profile summary attached to a session. It never
-// contains secret material.
+// ModelView 是会话所关联的模型配置摘要，绝不包含任何密钥内容。
 type ModelView struct {
 	ID      uuid.UUID `json:"id"`
 	Name    string    `json:"name"`
@@ -34,7 +33,7 @@ type ModelView struct {
 	Model   string    `json:"model"`
 }
 
-// SessionView is the API representation of a session.
+// SessionView 是会话的 API 表示。
 type SessionView struct {
 	ID           uuid.UUID     `json:"id"`
 	Title        string        `json:"title"`
@@ -46,13 +45,13 @@ type SessionView struct {
 	LastActiveAt time.Time     `json:"last_active_at"`
 }
 
-// CreateResult is a created session plus its workspace concurrency warning.
+// CreateResult 是新创建的会话及其工作区并发警告。
 type CreateResult struct {
 	SessionView
 	WorkspaceWarning bool `json:"workspace_warning"`
 }
 
-// MessageView is one message in session sequence order.
+// MessageView 是按会话序号排列的一条消息。
 type MessageView struct {
 	ID          uuid.UUID  `json:"id"`
 	RunID       *uuid.UUID `json:"run_id,omitempty"`
@@ -64,23 +63,23 @@ type MessageView struct {
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
-// MessagePage is a page of messages plus the cursor for the next page.
+// MessagePage 是一页消息及下一页的游标。
 type MessagePage struct {
 	Messages  []MessageView `json:"messages"`
 	NextAfter int64         `json:"next_after"`
 }
 
-// Handler serves the session HTTP endpoints.
+// Handler 提供会话的 HTTP 端点。
 type Handler struct {
 	service *Service
 }
 
-// NewHandler builds a Handler backed by service.
+// NewHandler 构建以 service 为后端的 Handler。
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
 }
 
-// Register mounts the session routes on an authenticated API group.
+// Register 将会话路由挂载到已鉴权的 API 分组上。
 func (h *Handler) Register(group *gin.RouterGroup) {
 	group.POST("/sessions", h.create)
 	group.GET("/sessions", h.list)
