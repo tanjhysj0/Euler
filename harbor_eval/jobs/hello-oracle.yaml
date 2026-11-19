@@ -1,0 +1,9 @@
+job_name: euler-harbor-hello-oracle
+jobs_dir: harbor_eval/results
+n_concurrent_trials: 1
+tasks:
+  - path: harbor_eval/tasks/hello-world
+agents:
+  - name: oracle
+environment:
+  type: docker
