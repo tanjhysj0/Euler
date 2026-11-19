@@ -11,5 +11,8 @@
 .env
 .env.*
 
+# 本地 worktree 目录
+/.worktrees/
+
 # 日志
 *.log
