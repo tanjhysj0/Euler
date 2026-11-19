@@ -92,9 +92,10 @@ func buildServices(cfg config.Config, db *gorm.DB) services {
 	events := event.NewStore(db, event.NewHub())
 	approvals := approval.NewService(approval.NewDBStore(db), events)
 	runStore := run.NewStore(db, events, persistence.HealthChecker{DB: db})
+	workspaceFinder := workspace.DBWorkspaceFinder{DB: db}
 	runner := agent.NewRuntime(agent.Deps{
-		DB: db, Events: events, Gate: approvals,
-		Profiles: profiles, Workspaces: workspace.DBWorkspaceFinder{DB: db},
+		Loader: agent.NewDBLoader(db, profiles, workspaceFinder),
+		Events: events, Gate: approvals,
 		Limits: cfg.Agent, ShellTimeout: cfg.ShellTimeout,
 		ShellOutputBytes: cfg.ShellOutputBytes, PreviewBytes: cfg.PreviewBytes,
 	})

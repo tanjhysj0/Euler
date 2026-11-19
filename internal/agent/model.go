@@ -19,7 +19,6 @@ import (
 	goopenai "github.com/meguminnnnnnnnn/go-openai"
 
 	"euler/internal/logging"
-	"euler/internal/modelprofile"
 	"euler/internal/tools"
 )
 
@@ -48,14 +47,14 @@ const (
 // OpenAIChatModelFactory 构建真实的 OpenAI 兼容 chat 模型。
 type OpenAIChatModelFactory struct{}
 
-// New 为指定 profile 创建一个 chat 模型。
+// New 为指定模型参数创建一个 chat 模型。
 func (OpenAIChatModelFactory) New(
-	ctx context.Context, profile modelprofile.ResolvedProfile,
+	ctx context.Context, spec ModelSpec,
 ) (model.ToolCallingChatModel, error) {
 	chatModel, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
-		APIKey:  profile.APIKey,
-		BaseURL: profile.BaseURL,
-		Model:   profile.Model,
+		APIKey:  spec.APIKey,
+		BaseURL: spec.BaseURL,
+		Model:   spec.Model,
 		Timeout: 60 * time.Second,
 	})
 	if err != nil {

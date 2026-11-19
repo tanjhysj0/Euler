@@ -39,10 +39,10 @@ type fileDeleteInput struct {
 // fileToolset 将六个文件工具绑定到同一个工作区 FileStore。
 type fileToolset struct {
 	registry *Registry
-	files    *workspace.FileStore
+	files    FileStore
 }
 
-func (r *Registry) fileTools(files *workspace.FileStore) ([]tool.BaseTool, error) {
+func (r *Registry) fileTools(files FileStore) ([]tool.BaseTool, error) {
 	set := fileToolset{registry: r, files: files}
 	builders := []func() (tool.BaseTool, error){
 		func() (tool.BaseTool, error) {

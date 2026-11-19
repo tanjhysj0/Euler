@@ -97,6 +97,17 @@ type Runner interface {
 	Run(ctx context.Context, request Request) error
 }
 
+// RunStore 是 Manager 依赖的持久化端口。Store 是生产实现，
+// 测试可以注入内存实现来验证编排行为。
+type RunStore interface {
+	Start(ctx context.Context, sessionID uuid.UUID, content string) (StartResult, error)
+	MarkRunning(ctx context.Context, request Request) (bool, error)
+	Finish(ctx context.Context, input FinishInput) error
+	Cancel(ctx context.Context, runID uuid.UUID) (Snapshot, error)
+	Interrupt(ctx context.Context, runID uuid.UUID) error
+	RecoverInterrupted(ctx context.Context) error
+}
+
 // RunnerFunc 将一个函数适配为 Runner 接口。
 type RunnerFunc func(ctx context.Context, request Request) error
 

@@ -155,7 +155,9 @@ func TestRuntimeCancelStopsModel(t *testing.T) {
 // 错误形态），并要求返回带错误码且已脱敏的错误。
 func TestConsumeRoundMapsStreamError(t *testing.T) {
 	fixture := newRuntimeFixture(t)
-	writer := newDeltaWriter(fixture.deps(t, nil), fixture.request, "sk-stream-test")
+	writer := newDeltaWriter(
+		fixture.events, fixture.request, runtimeNoopMessages{}, "sk-stream-test",
+	)
 	reader, pipe := schema.Pipe[*schema.Message](2)
 	pipe.Send(schema.AssistantMessage("partial", nil), nil)
 	pipe.Send(nil, errors.New("upstream failed for key sk-stream-test"))
@@ -171,7 +173,9 @@ func TestConsumeRoundMapsStreamError(t *testing.T) {
 
 func TestConsumeRoundPassesContextError(t *testing.T) {
 	fixture := newRuntimeFixture(t)
-	writer := newDeltaWriter(fixture.deps(t, nil), fixture.request, "sk-stream-test")
+	writer := newDeltaWriter(
+		fixture.events, fixture.request, runtimeNoopMessages{}, "sk-stream-test",
+	)
 	reader, pipe := schema.Pipe[*schema.Message](1)
 	pipe.Send(nil, context.Canceled)
 	pipe.Close()
@@ -228,14 +232,6 @@ func (f *fakeReactModel) WithTools(
 	return f, nil
 }
 
-type fakeFactory struct{ chatModel model.ToolCallingChatModel }
-
-func (f fakeFactory) New(
-	context.Context, modelprofile.ResolvedProfile,
-) (model.ToolCallingChatModel, error) {
-	return f.chatModel, nil
-}
-
 type staticResolver struct{ profile modelprofile.ResolvedProfile }
 
 func (r staticResolver) Resolve(
@@ -263,14 +259,14 @@ type runtimeFixture struct {
 
 func (f *runtimeFixture) deps(t *testing.T, chatModel model.ToolCallingChatModel) Deps {
 	t.Helper()
+	resolver := staticResolver{profile: modelprofile.ResolvedProfile{
+		ID: uuid.New(), BaseURL: "http://127.0.0.1:1/v1",
+		Model: "test-model", APIKey: "sk-runtime-test",
+	}}
 	return Deps{
-		DB: f.db, Events: f.events, Gate: runtimeGate{},
-		Profiles: staticResolver{profile: modelprofile.ResolvedProfile{
-			ID: uuid.New(), BaseURL: "http://127.0.0.1:1/v1",
-			Model: "test-model", APIKey: "sk-runtime-test",
-		}},
-		Workspaces: workspace.DBWorkspaceFinder{DB: f.db},
-		Factory:    fakeFactory{chatModel: chatModel},
+		Loader: NewDBLoader(f.db, resolver, workspace.DBWorkspaceFinder{DB: f.db}),
+		Events: f.events, Gate: runtimeGate{},
+		Factory: fakeFactory{chatModel: chatModel},
 		Limits: config.AgentLimits{
 			MaxModelRounds: 4, MaxToolCalls: 8, MaxOutputBytes: 4096,
 		},

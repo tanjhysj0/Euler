@@ -18,13 +18,13 @@ type shellInput struct {
 // shellToolset 将 shell 工具绑定到单个执行器和工作区目录。
 type shellToolset struct {
 	registry *Registry
-	executor *Shell
+	executor Executor
 	dir      string
 	secrets  []string
 }
 
 func (r *Registry) shellTool(
-	executor *Shell, dir string, secrets []string,
+	executor Executor, dir string, secrets []string,
 ) (tool.BaseTool, error) {
 	set := shellToolset{registry: r, executor: executor, dir: dir, secrets: secrets}
 	return registerTool(r, "shell", "在工作区执行 shell 命令（需用户批准）", set.run)

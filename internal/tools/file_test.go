@@ -65,12 +65,14 @@ func TestFileListAndSearchRespectOutputBudget(t *testing.T) {
 		writeTestFile(t, fixture.dir, prefix+long+".txt", "x")
 	}
 	registry := NewRegistry(RegistryDeps{
-		DB: fixture.db, Events: fixture.events, Gate: &fakeGate{}, RunID: fixture.runID,
-		MaxToolCalls: 10, MaxOutputBytes: 130, APIKey: "sk-fixture-key",
+		Calls: NewGormRecorder(fixture.db), Events: fixture.events, Gate: &fakeGate{},
+		RunID: fixture.runID, MaxToolCalls: 10, MaxOutputBytes: 130,
+		APIKey: "sk-fixture-key",
 	})
 	built, err := registry.Tools(
 		workspace.NewFileStore(fixture.dir, 1024),
-		ShellConfig{Timeout: time.Second, MaxOutputBytes: 1024}, fixture.dir, nil)
+		NewShellExecutor(ShellConfig{Timeout: time.Second, MaxOutputBytes: 1024}),
+		fixture.dir, nil)
 	require.NoError(t, err)
 	for _, call := range []struct{ name, args, key string }{
 		{"file_list", `{}`, "entries"},
@@ -263,12 +265,12 @@ func (f *toolsFixture) buildTools(
 ) []tool.BaseTool {
 	t.Helper()
 	registry := NewRegistry(RegistryDeps{
-		DB: f.db, Events: f.events, Gate: gate, RunID: f.runID,
+		Calls: NewGormRecorder(f.db), Events: f.events, Gate: gate, RunID: f.runID,
 		MaxToolCalls: maxCalls, MaxOutputBytes: 64 * 1024, APIKey: "sk-fixture-key",
 	})
 	built, err := registry.Tools(
 		workspace.NewFileStore(f.dir, 1024*1024),
-		ShellConfig{Timeout: 5 * time.Second, MaxOutputBytes: 1024},
+		NewShellExecutor(ShellConfig{Timeout: 5 * time.Second, MaxOutputBytes: 1024}),
 		f.dir, []string{"EULER_TEST_SECRET"},
 	)
 	require.NoError(t, err)

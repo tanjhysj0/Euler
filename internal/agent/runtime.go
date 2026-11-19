@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"time"
 
@@ -11,34 +10,61 @@ import (
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
+	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
-	"gorm.io/gorm"
 
 	"euler/internal/approval"
 	"euler/internal/config"
 	"euler/internal/event"
-	"euler/internal/modelprofile"
-	"euler/internal/persistence"
 	"euler/internal/run"
-	"euler/internal/workspace"
+	"euler/internal/tools"
 )
 
-const emptyHistory = 0
+// ErrMissingLoader 表示 Runtime 没有配置输入装载器。
+var ErrMissingLoader = errors.New("agent: missing input loader")
 
-// ChatModelFactory 为单个已解析的 profile 构建基础 chat 模型。
+// ModelSpec 是 agent 内核所需的模型参数，不依赖模型配置服务。
+type ModelSpec struct {
+	BaseURL string
+	Model   string
+	APIKey  string
+}
+
+// ChatModelFactory 根据模型参数构建基础 chat 模型。
 type ChatModelFactory interface {
-	New(ctx context.Context, profile modelprofile.ResolvedProfile) (
-		model.ToolCallingChatModel, error)
+	New(ctx context.Context, spec ModelSpec) (model.ToolCallingChatModel, error)
+}
+
+// MessageRecorder 持久化流式助手消息内容。生产实现写入数据库，
+// 测试可以注入内存实现。
+type MessageRecorder interface {
+	UpdateContent(ctx context.Context, messageID uuid.UUID, content string) error
+}
+
+// RunInput 是 Runtime 执行一次 run 所需的全部已装载输入。
+// 它把数据库、模型配置和工作区解析留在 Runtime 之外。
+type RunInput struct {
+	Request  run.Request
+	History  []*schema.Message
+	Model    ModelSpec
+	Dir      string
+	Secrets  []string
+	Calls    tools.CallRecorder
+	Messages MessageRecorder
+}
+
+// InputLoader 装载一次 run 的输入。生产实现访问数据库，
+// 测试可以直接构造 RunInput。
+type InputLoader interface {
+	Load(ctx context.Context, request run.Request) (RunInput, error)
 }
 
 // Deps 携带单次 run 所需的全部依赖；每次 Run 都会构建全新的工具闭包，
 // 避免工作区或审批状态在 run 之间泄漏。
 type Deps struct {
-	DB               *gorm.DB
+	Loader           InputLoader
 	Events           event.Publisher
 	Gate             approval.Gate
-	Profiles         modelprofile.Resolver
-	Workspaces       workspace.WorkspaceFinder
 	Factory          ChatModelFactory
 	Limits           config.AgentLimits
 	ShellTimeout     time.Duration
@@ -61,38 +87,31 @@ func NewRuntime(deps Deps) *Runtime {
 }
 
 const (
-	roleUser         = "user"
-	roleAssistant    = "assistant"
 	messageCompleted = "completed"
 	maxStepHeadroom  = 10
 )
 
-// Run 驱动模型/工具循环直到得出最终答案，过程中将助手增量内容流式写入
-// run 的消息和事件。
+// Run 装载输入并执行一次 run。
 func (rt *Runtime) Run(ctx context.Context, request run.Request) error {
-	var session persistence.Session
-	if err := rt.deps.DB.WithContext(ctx).
-		First(&session, "id = ?", request.SessionID).Error; err != nil {
-		return fmt.Errorf("load session: %w", err)
+	if rt.deps.Loader == nil {
+		return ErrMissingLoader
 	}
-	profile, err := rt.deps.Profiles.Resolve(ctx, session.ModelProfileID)
-	if err != nil {
-		return fmt.Errorf("resolve model profile: %w", err)
-	}
-	dir, err := rt.deps.Workspaces.WorkspacePath(ctx, request.WorkspaceID)
-	if err != nil {
-		return fmt.Errorf("resolve workspace: %w", err)
-	}
-	history, err := rt.loadHistory(ctx, request, dir)
+	input, err := rt.deps.Loader.Load(ctx, request)
 	if err != nil {
 		return err
 	}
-	reactAgent, err := rt.buildAgent(ctx, request, profile, dir)
+	return rt.RunInput(ctx, input)
+}
+
+// RunInput 在已装载的输入上驱动模型/工具循环，过程中将助手增量内容
+// 流式写入消息记录和事件。
+func (rt *Runtime) RunInput(ctx context.Context, input RunInput) error {
+	reactAgent, err := rt.buildAgent(ctx, input)
 	if err != nil {
 		return err
 	}
-	writer := newDeltaWriter(rt.deps, request, profile.APIKey)
-	return rt.stream(ctx, reactAgent, history, writer)
+	writer := newDeltaWriter(rt.deps.Events, input.Request, input.Messages, input.Model.APIKey)
+	return rt.stream(ctx, reactAgent, input.History, writer)
 }
 
 // stream 并行消费最终输出与每轮的 future stream；任一方失败都会通过
@@ -112,17 +131,14 @@ func (*Runtime) stream(
 	return group.Wait()
 }
 
-func (rt *Runtime) buildAgent(
-	ctx context.Context, request run.Request,
-	profile modelprofile.ResolvedProfile, dir string,
-) (*react.Agent, error) {
-	base, err := rt.deps.Factory.New(ctx, profile)
+func (rt *Runtime) buildAgent(ctx context.Context, input RunInput) (*react.Agent, error) {
+	base, err := rt.deps.Factory.New(ctx, input.Model)
 	if err != nil {
-		return nil, fmt.Errorf("create chat model: %w", err)
+		return nil, err
 	}
 	limited := newRoundLimitedModel(
-		newRetryModel(base, profile.APIKey), rt.deps.Limits.MaxModelRounds)
-	built, err := rt.buildTools(ctx, request, profile, dir)
+		newRetryModel(base, input.Model.APIKey), rt.deps.Limits.MaxModelRounds)
+	built, err := rt.buildTools(input)
 	if err != nil {
 		return nil, err
 	}
@@ -134,52 +150,9 @@ func (rt *Runtime) buildAgent(
 		MaxStep: rt.deps.Limits.MaxModelRounds*2 + maxStepHeadroom,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("create react agent: %w", err)
+		return nil, err
 	}
 	return reactAgent, nil
-}
-
-// loadHistory 构建展示用历史：一条 system 消息、此前已完成的
-// user/assistant 消息，最后是当前的 user 消息。工具交互只保留在
-// Eino 状态内部，不会进入持久化历史。
-func (rt *Runtime) loadHistory(
-	ctx context.Context, request run.Request, dir string,
-) ([]*schema.Message, error) {
-	var current persistence.Message
-	err := rt.deps.DB.WithContext(ctx).
-		Where("run_id = ? AND role = ?", request.RunID, roleUser).
-		First(&current).Error
-	if err != nil {
-		return nil, fmt.Errorf("load user message: %w", err)
-	}
-	var past []persistence.Message
-	err = rt.deps.DB.WithContext(ctx).
-		Where("session_id = ? AND session_seq < ? AND role IN ? AND status = ?",
-			request.SessionID, current.SessionSeq,
-			[]string{roleUser, roleAssistant}, messageCompleted).
-		Order("session_seq ASC").Find(&past).Error
-	if err != nil {
-		return nil, fmt.Errorf("load history: %w", err)
-	}
-	history := make([]*schema.Message, emptyHistory, len(past)+2)
-	history = append(history, schema.SystemMessage(systemPrompt(dir)))
-	for _, message := range past {
-		history = append(history, displayMessage(message))
-	}
-	return append(history, schema.UserMessage(current.Content)), nil
-}
-
-func systemPrompt(dir string) string {
-	return "你是 Euler 本地编码助手。工作区绝对路径：" + dir + "。" +
-		"文件工具只能访问该工作区内的路径。写入、补丁、删除文件和执行 shell 命令都需要用户审批。" +
-		"回答保持简洁。"
-}
-
-func displayMessage(message persistence.Message) *schema.Message {
-	if message.Role == roleAssistant {
-		return schema.AssistantMessage(message.Content, nil)
-	}
-	return schema.UserMessage(message.Content)
 }
 
 func drainFinal(stream *schema.StreamReader[*schema.Message]) error {

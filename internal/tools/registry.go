@@ -8,20 +8,15 @@ import (
 	"fmt"
 	"log/slog"
 	"sync/atomic"
-	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/compose"
 	"github.com/google/uuid"
-	"gorm.io/datatypes"
-	"gorm.io/gorm"
 
 	"euler/internal/approval"
 	"euler/internal/event"
 	"euler/internal/logging"
-	"euler/internal/persistence"
-	"euler/internal/workspace"
 )
 
 // ErrToolCallLimit 用于中止工具调用预算耗尽的运行。
@@ -66,7 +61,7 @@ const (
 
 // RegistryDeps 携带每次工具调用所需的、按运行划分的依赖。
 type RegistryDeps struct {
-	DB             *gorm.DB
+	Calls          CallRecorder
 	Events         event.Publisher
 	Gate           approval.Gate
 	RunID          uuid.UUID
@@ -88,13 +83,13 @@ func NewRegistry(deps RegistryDeps) *Registry { return &Registry{deps: deps} }
 
 // Tools 组装绑定到单个工作区目录的七个 agent 工具。
 func (r *Registry) Tools(
-	files *workspace.FileStore, shell ShellConfig, dir string, secrets []string,
+	files FileStore, executor Executor, dir string, secrets []string,
 ) ([]tool.BaseTool, error) {
 	built, err := r.fileTools(files)
 	if err != nil {
 		return nil, err
 	}
-	shellTool, err := r.shellTool(NewShellExecutor(shell), dir, secrets)
+	shellTool, err := r.shellTool(executor, dir, secrets)
 	if err != nil {
 		return nil, err
 	}
@@ -129,30 +124,36 @@ func registerTool[T any](
 }
 
 func (r *Registry) invoke(ctx context.Context, call toolInvocation) (string, error) {
-	row, err := r.openCall(ctx, call)
-	if err != nil {
+	rowID := uuid.New()
+	argsJSON := r.encodeArgs(call.args)
+	if err := r.deps.Calls.Start(ctx, Call{
+		ID:            rowID,
+		RunID:         r.deps.RunID,
+		Name:          call.name,
+		ArgumentsJSON: []byte(argsJSON),
+	}); err != nil {
 		return emptyObservation, err
 	}
 	if r.calls.Add(singleToolCall) > int64(r.deps.MaxToolCalls) {
-		return emptyObservation, r.budgetExceeded(ctx, row.ID)
+		return emptyObservation, r.budgetExceeded(ctx, rowID)
 	}
-	if err = r.appendEvent(ctx, eventToolStarted, map[string]any{
-		"tool_call_id":  row.ID.String(),
+	if err := r.appendEvent(ctx, eventToolStarted, map[string]any{
+		"tool_call_id":  rowID.String(),
 		"name":          call.name,
-		"arguments":     json.RawMessage(row.ArgumentsJSON),
+		"arguments":     json.RawMessage(argsJSON),
 		"model_call_id": compose.GetToolCallID(ctx),
 	}); err != nil {
 		return emptyObservation, err
 	}
 	outcome, err := call.fn(ctx)
 	if err != nil {
-		r.failCall(ctx, row.ID, err)
+		r.failCall(ctx, rowID, err)
 		return emptyObservation, err
 	}
 	if outcome.apply == nil {
-		return r.finalize(ctx, row.ID, call.name, outcome)
+		return r.finalize(ctx, rowID, call.name, outcome)
 	}
-	return r.guarded(ctx, row.ID, call.name, outcome)
+	return r.guarded(ctx, rowID, call.name, outcome)
 }
 
 func (r *Registry) guarded(
@@ -186,12 +187,12 @@ func (r *Registry) recordRejected(
 	ctx context.Context, callID uuid.UUID, name string,
 ) (string, error) {
 	body := observationBody("rejected", map[string]any{"message": rejectedMessage})
-	err := r.deps.DB.WithContext(ctx).Model(&persistence.ToolCall{}).
-		Where("id = ?", callID).Update("result_json", datatypes.JSON(body)).Error
-	if err != nil {
-		return emptyObservation, fmt.Errorf("record rejected tool call: %w", err)
+	if err := r.deps.Calls.Reject(ctx, callID, body); err != nil {
+		return emptyObservation, err
 	}
-	if err = r.appendEvent(ctx, eventToolCompleted, resultPayload(callID, name, body)); err != nil {
+	if err := r.appendEvent(
+		ctx, eventToolCompleted, resultPayload(callID, name, body),
+	); err != nil {
 		return emptyObservation, err
 	}
 	return body, nil
@@ -200,38 +201,22 @@ func (r *Registry) recordRejected(
 func (r *Registry) finalize(
 	ctx context.Context, callID uuid.UUID, name string, outcome toolOutcome,
 ) (string, error) {
-	status, eventType := toolStatusSucceeded, eventToolCompleted
+	eventType := eventToolCompleted
 	if outcome.failed {
-		status, eventType = toolStatusFailed, eventToolFailed
+		eventType = eventToolFailed
 	}
 	body := logging.Redact(outcome.observation, r.deps.APIKey)
-	now := time.Now().UTC()
-	err := r.deps.DB.WithContext(ctx).Model(&persistence.ToolCall{}).
-		Where("id = ?", callID).Updates(map[string]any{
-		"status": status, "result_json": datatypes.JSON(body), "finished_at": now,
-	}).Error
-	if err != nil {
-		return emptyObservation, fmt.Errorf("finish tool call: %w", err)
+	if outcome.failed {
+		if err := r.deps.Calls.Fail(ctx, callID, body, emptyObservation); err != nil {
+			return emptyObservation, err
+		}
+	} else if err := r.deps.Calls.Succeed(ctx, callID, body); err != nil {
+		return emptyObservation, err
 	}
-	if err = r.appendEvent(ctx, eventType, resultPayload(callID, name, body)); err != nil {
+	if err := r.appendEvent(ctx, eventType, resultPayload(callID, name, body)); err != nil {
 		return emptyObservation, err
 	}
 	return body, nil
-}
-
-func (r *Registry) openCall(
-	ctx context.Context, call toolInvocation,
-) (persistence.ToolCall, error) {
-	now := time.Now().UTC()
-	row := persistence.ToolCall{
-		ID: uuid.New(), RunID: r.deps.RunID, Name: call.name,
-		ArgumentsJSON: datatypes.JSON(r.encodeArgs(call.args)),
-		Status:        toolStatusPending, CreatedAt: now, StartedAt: &now,
-	}
-	if err := r.deps.DB.WithContext(ctx).Create(&row).Error; err != nil {
-		return persistence.ToolCall{}, fmt.Errorf("create tool call: %w", err)
-	}
-	return row, nil
 }
 
 func (r *Registry) encodeArgs(args any) string {
@@ -251,13 +236,8 @@ func (r *Registry) budgetExceeded(ctx context.Context, callID uuid.UUID) error {
 }
 
 func (r *Registry) failCall(ctx context.Context, callID uuid.UUID, cause error) {
-	now := time.Now().UTC()
 	message := logging.Redact(cause.Error(), r.deps.APIKey)
-	err := r.deps.DB.WithContext(ctx).Model(&persistence.ToolCall{}).
-		Where("id = ?", callID).Updates(map[string]any{
-		"status": toolStatusFailed, "error_message": message, "finished_at": now,
-	}).Error
-	if err != nil {
+	if err := r.deps.Calls.Fail(ctx, callID, "", message); err != nil {
 		slog.Error("mark tool call failed", "tool_call_id", callID, "error", err)
 	}
 }

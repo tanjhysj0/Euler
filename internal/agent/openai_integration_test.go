@@ -19,6 +19,7 @@ import (
 	"euler/internal/modelprofile"
 	"euler/internal/persistence"
 	"euler/internal/tools"
+	"euler/internal/workspace"
 )
 
 const sseChunkTemplate = `{"id":"chatcmpl-1","object":"chat.completion.chunk",` +
@@ -107,9 +108,13 @@ func openAIDeps(t *testing.T, fixture *runtimeFixture, baseURL string) Deps {
 	t.Helper()
 	deps := fixture.deps(t, nil)
 	deps.Factory = nil
-	deps.Profiles = staticResolver{profile: modelprofile.ResolvedProfile{
-		BaseURL: baseURL, Model: "test-model", APIKey: "sk-openai-test",
-	}}
+	deps.Loader = NewDBLoader(
+		fixture.db,
+		staticResolver{profile: modelprofile.ResolvedProfile{
+			BaseURL: baseURL, Model: "test-model", APIKey: "sk-openai-test",
+		}},
+		workspace.DBWorkspaceFinder{DB: fixture.db},
+	)
 	return deps
 }
 

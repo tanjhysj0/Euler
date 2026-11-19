@@ -20,7 +20,7 @@ type Limits struct {
 
 // Manager 负责 run worker、取消和优雅关闭。
 type Manager struct {
-	store  *Store
+	store  RunStore
 	runner Runner
 	limits Limits
 
@@ -36,7 +36,7 @@ const noDuration time.Duration = 0
 
 // NewManager 构建一个通过 store 持久化的 Manager。run 由 runner 在 limits
 // 约束下执行。
-func NewManager(store *Store, runner Runner, limits Limits) *Manager {
+func NewManager(store RunStore, runner Runner, limits Limits) *Manager {
 	return &Manager{
 		store:   store,
 		runner:  runner,

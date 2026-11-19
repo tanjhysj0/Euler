@@ -10,11 +10,9 @@ import (
 	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 
 	"euler/internal/event"
 	"euler/internal/logging"
-	"euler/internal/persistence"
 	"euler/internal/run"
 )
 
@@ -29,7 +27,7 @@ const (
 // deltaWriter 将助手文本批量写入流式消息行和 message.delta 事件。
 // 只有 future 消费者 goroutine 会访问它。
 type deltaWriter struct {
-	db        *gorm.DB
+	messages  MessageRecorder
 	events    event.Publisher
 	runID     uuid.UUID
 	messageID uuid.UUID
@@ -38,9 +36,11 @@ type deltaWriter struct {
 	pending   []rune
 }
 
-func newDeltaWriter(deps Deps, request run.Request, apiKey string) *deltaWriter {
+func newDeltaWriter(
+	events event.Publisher, request run.Request, messages MessageRecorder, apiKey string,
+) *deltaWriter {
 	return &deltaWriter{
-		db: deps.DB, events: deps.Events, runID: request.RunID,
+		messages: messages, events: events, runID: request.RunID,
 		messageID: request.AssistantMessageID, apiKey: apiKey,
 	}
 }
@@ -63,12 +63,10 @@ func (w *deltaWriter) flush(ctx context.Context) error {
 	delta := logging.Redact(string(w.pending), w.apiKey)
 	w.pending = w.pending[:emptyPending]
 	content := logging.Redact(w.full.String(), w.apiKey)
-	err := w.db.WithContext(ctx).Model(&persistence.Message{}).
-		Where("id = ?", w.messageID).Update("content", content).Error
-	if err != nil {
-		return fmt.Errorf("update message content: %w", err)
+	if err := w.messages.UpdateContent(ctx, w.messageID, content); err != nil {
+		return err
 	}
-	_, err = w.events.Append(ctx, w.runID, "message.delta", map[string]any{
+	_, err := w.events.Append(ctx, w.runID, "message.delta", map[string]any{
 		"message_id": w.messageID.String(), "delta": delta,
 	})
 	if err != nil {
