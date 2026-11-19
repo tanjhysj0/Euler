@@ -358,6 +358,8 @@ def test_start_run_reads_nested_run_id():
 
 def test_decide_ignores_conflict():
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/bootstrap":
+            return httpx.Response(204)
         return httpx.Response(409, json={"error": {"code": "approval_already_decided"}})
 
     async def scenario():
