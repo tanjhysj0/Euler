@@ -2,6 +2,7 @@
 package workspace
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -25,7 +26,14 @@ type Repo struct {
 
 // Materialize 复制 fixture 并依次应用补丁，返回带基线 SHA 的仓库。
 func Materialize(fixtureDir, dstDir string, patches ...string) (*Repo, error) {
-	if err := CopyDir(fixtureDir, dstDir); err != nil {
+	entries, err := os.ReadDir(dstDir)
+	if err == nil && len(entries) > 0 {
+		return nil, fmt.Errorf("目标目录 %s 必须为空", dstDir)
+	}
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("检查目标目录 %s: %w", dstDir, err)
+	}
+	if err = CopyDir(fixtureDir, dstDir); err != nil {
 		return nil, err
 	}
 	if err := runGit(dstDir, "init", "-q"); err != nil {
@@ -118,6 +126,12 @@ func (r *Repo) RemoveNewTestFiles() ([]string, error) {
 		}
 	}
 	removed := make([]string, 0)
+	// 第一阶段只收集待删除文件，避免在 WalkDir 回调内做删除操作。
+	type pendingFile struct {
+		abs string
+		rel string
+	}
+	pending := make([]pendingFile, 0)
 	walkErr := filepath.WalkDir(r.Dir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -139,14 +153,18 @@ func (r *Repo) RemoveNewTestFiles() ([]string, error) {
 		if _, ok := baseline[rel]; ok {
 			return nil
 		}
-		if removeErr := os.Remove(path); removeErr != nil { //nolint:gosec // 工作区独占访问
-			return removeErr
-		}
-		removed = append(removed, rel)
+		pending = append(pending, pendingFile{abs: path, rel: rel})
 		return nil
 	})
 	if walkErr != nil {
 		return nil, walkErr
+	}
+	// 第二阶段逐个删除收集到的文件。
+	for _, item := range pending {
+		if err := os.Remove(item.abs); err != nil {
+			return nil, err
+		}
+		removed = append(removed, item.rel)
 	}
 	if len(removed) > 0 {
 		if err := runGit(r.Dir, "add", "-A"); err != nil {
@@ -167,10 +185,15 @@ func CopyDir(src, dst string) error {
 			return relErr
 		}
 		target := filepath.Join(dst, rel)
-		if entry.IsDir() {
-			if entry.Name() == gitDirName {
+		// 先跳过 .git：目录整体跳过，文件（worktree/submodule 指针）仅跳过自身，
+		// 避免子仓库指针破坏目标工作区的隔离性。
+		if entry.Name() == gitDirName {
+			if entry.IsDir() {
 				return fs.SkipDir
 			}
+			return nil
+		}
+		if entry.IsDir() {
 			return os.MkdirAll(target, 0o755) //nolint:gosec // 工作区目录需可读执行
 		}
 		if !entry.Type().IsRegular() {
