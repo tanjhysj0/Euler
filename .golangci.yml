@@ -1,0 +1,1230 @@
+# Euler — golangci-lint 配置
+#
+# 本文件约束：Euler 项目用 golangci-lint v2 跑的代码静态检查规则集。
+#
+# 它不约束：
+#   - 项目本身的业务规则（领域逻辑）—— 那由 ADR 与 tests 约束；
+#   - 单元测试 / 集成测试运行逻辑 —— 那由 Makefile 约束；
+#   - 依赖版本 —— 那由 go.mod 约束。
+#
+# 选用 v2 schema（version: "2"）的原因：
+#   - formatters 与 linters 解耦：gofmt/goimports 走独立流水线，
+#     不与 lint 逻辑混在一个 error stream 里；
+#   - default: standard 提供基线，其余检查逐项 enable / disable；
+#   - settings 顶层化在 linters.settings 下，扁平清晰。
+#
+# 设计原则：
+#   1. 基线集（errcheck / govet / ineffassign / staticcheck / unused）
+#      是 Go 社区不可妥协的基线（v2 中 gosimple 已并入 staticcheck），
+#      本配置只在其之上叠加，不删减；
+#   2. 业务相关项：bodyclose、contextcheck、errorlint、revive、gosec、
+#      exhaustive —— 这些与本项目的"DDD + Gin + GORM + zerolog"技术栈强相关；
+#   3. 冲突项：v2 默认开启但与中文注释 / DDD 字段命名 / ORM 用法冲突的，
+#      显式 disable 并写明理由，避免后续维护者疑惑。
+#
+# 本文件如何生效：
+#   - 本地：make lint  （或直接 golangci-lint run --timeout=5m）
+#   - 单包：golangci-lint run ./internal/book
+#   - 自动修复：golangci-lint run --fix  （formatters 必走）
+#
+# 退出码约定（run.issues-exit-code）：
+#   - 默认：发现 issue 返回 exit 1，本地与 CI 口径一致，作为硬门禁；
+#   - 仅查看报告不阻断时，临时传 `--issues-exit-code=0` 覆盖。
+
+version: "2"
+
+run:
+  # ---- 单次 lint 跑的最长 wall-clock 时间 ----
+  # 约束：超时则中止当前分析进程，避免大仓库单包卡死。
+  # 取值：5 分钟对本仓库 90+ 文件足够（实测 ~30 秒）；CI 上 10 分钟亦可。
+  timeout: 5m
+
+  # ---- 分析 worker 数量 ----
+  # 约束：并行分析 Go 包时的最大 goroutine 数。
+  # 取值：0 表示使用 GOMAXPROCS；显式写出便于 CPU 100% 排错。
+  concurrency: 0
+
+  # ---- 分析时使用的 Go build tag ----
+  # 约束：构建标签决定哪些文件被纳入分析。
+  # 取值：integration —— 集成测试走 //go:build integration，否则
+  #       会因缺 TEST_DATABASE_URL 而编译报错。
+  build-tags:
+    - integration
+
+  # ---- 是否允许多个 lint 实例并发跑 ----
+  # 约束：true 时多个 golangci-lint 进程可同时跑（不会因 lock 卡住）。
+  # 取值：true —— 本地手动跑与 IDE 后台跑不冲突。
+  allow-parallel-runners: true
+
+  # ---- 发现 issue 时的进程退出码 ----
+  # 约束：0 = exit 0（即使有 issue），1 = exit 1（硬门禁）。
+  # 取值：1 —— 本地与 CI 口径一致；仅查看报告时用 --issues-exit-code=0 覆盖。
+  issues-exit-code: 1
+
+linters:
+  # ---- 基线集（default: standard）----
+  # 约束：只启用 v2 的 standard 基线，其余检查全部显式 enable。
+  # 包含：errcheck / govet / ineffassign / staticcheck / unused
+  #       —— gosimple 在 v2 已并入 staticcheck；基线项不在本配置内 disable。
+  # 不取 all：all 会打开 70+ 个未逐项评估的 linter，噪音与版本漂移不可控。
+  default: standard
+
+  enable:
+    # ============== HTTP / DB 资源管理 ==============
+    # bodyclose — 约束：HTTP response body 必须关闭。
+    #            场景：net/http.Client.Do 之后必须 defer resp.Body.Close()，
+    #                  否则连接泄漏、GC 推迟。本项目用 Gin handler 转发
+    #                  外部 HTTP 调用，必须强制。
+    - bodyclose
+
+    # contextcheck — 约束：ctx 必须作为 I/O 函数第一参数透传。
+    #              场景：所有 DB / Redis / HTTP 调用都依赖 ctx 控制超时与
+    #                    trace 传递；ctx 被吞掉是常见 bug。
+    - contextcheck
+
+    # ============== 错误处理 ==============
+    # errname — 约束：错误类型命名必须以 Error 结尾。
+    #          场景：errors.As 通过类型名查找，命名不规范会破坏调用约定。
+    - errname
+
+    # errorlint — 约束：强制 errors.Is/As/%w 用法，禁止字符串匹配错误。
+    #           场景：本项目 app.ErrXxx / domain.ErrXxx 必须能被 errors.Is
+    #                 识别，错误包装必须走 %w 链路。
+    - errorlint
+
+    # nilerr — 约束：禁止 `if err == nil { err = ... }` 这种把 nil 覆盖掉的模式。
+    #        场景：易引发 nil 错误被新错误覆盖，丢失原始信息。
+    - nilerr
+
+    # nilnil — 约束：禁止返回 (nil, nil) 双 nil。
+    #        场景：调用方做 `if err == nil` 判断时容易漏掉空数据分支。
+    - nilnil
+
+    # ============== 控制流 / 结构 ==============
+    # exhaustive — 约束：switch 判定枚举值时必须穷举所有 case。
+    #            场景：本项目状态机（BookStatus / ChapterStatus / TaskStatus）
+    #                  新增状态时必须走完所有 switch，否则静默 fallthrough。
+    - exhaustive
+
+    # gocognit — 约束：圈复杂度上限（详见 settings：min-complexity 25）。
+    #          场景：单个函数不应有过深分支（嵌套 if / for / switch），
+    #                否则难以测试与重构。
+    - gocognit
+
+    # funlen — 约束：函数体行数 / 语句数上限（详见 settings）。
+    #         场景：与 gocognit 互补——gocognit 看圈复杂度，
+    #               funlen 看线性长度。平铺线性代码也会让函数难读。
+    - funlen
+
+    # gocritic — 约束：通用体检（详见 settings，启用 diagnostic / style / performance 三个 tag）。
+    #          场景：覆盖 defer in goroutine、append 拷贝、拷贝大 struct 等细节。
+    - gocritic
+
+    # nakedret — 约束：函数超过设定行数时禁止裸 return。
+    #          场景：长函数 + 裸 return 让 reader 难以跟踪变量最终值。
+    - nakedret
+
+    # prealloc — 约束：可预分配的 slice 提示。
+    #          场景：`for ... { s = append(s, x) }` 应改为 `make([]T, 0, n)`。
+    - prealloc
+
+    # predeclared — 约束：禁止覆盖内建标识符。
+    #             场景：`id / err / len / cap` 被遮蔽是 bug 高发区。
+    - predeclared
+
+    # revive — 约束：命名 / 导出注释 / defer 顺序等。
+    #        场景：替代 golint，更现代；本项目用其默认规则 + 局部豁免。
+    - revive
+
+    # ============== 安全 ==============
+    # gosec — 约束：安全扫描（详见 settings 的 excludes 与注释）。
+    #       场景：覆盖 G102 (SQL Bind) / G201 (SQL 拼接) / G404 (弱随机) 等。
+    #             本项目开启并排除了已确认是 false-positive 的子项。
+    - gosec
+
+    # ============== 测试 ==============
+    # thelper — 约束：t.Helper() 必须打在被多测试复用的 helper 函数首位。
+    #         场景：否则失败时栈定位不准，指向 helper 而非真正断言行。
+    - thelper
+
+    # tparallel — 约束：检测 t.Parallel() 与 body 串并行混用。
+    #           场景：在 t.Parallel 后又写共享状态代码会触发 race。
+    - tparallel
+
+    # ============== 杂项 ==============
+    # misspell — 约束：英文拼写错误（含英文注释）。
+    #          场景：注释里 "fucntion" / "recieve" 一类笔误。
+    - misspell
+
+    # nolintlint — 约束：//nolint 指令本身的合法性（linter 名拼写、必填字段）。
+    #           场景：防止写了无效的 //nolint:gobbledygook 还以为自己抑制了 lint。
+    - nolintlint
+
+    # unconvert — 约束：冗余类型转换。
+    #           场景：`string([]byte)` 在已经是 string 的变量上误写。
+    - unconvert
+
+    # unparam — 约束：未使用参数 / 永远为真的返回值。
+    #         场景：函数形参传入但从未读取，或分支恒为同一值。
+    - unparam
+
+    # usestdlibvars — 约束：用 http.MethodGet 等标准库常量替代魔法字符串。
+    #              场景：`if r.Method == "GET"` 应为 `r.Method == http.MethodGet`。
+    - usestdlibvars
+
+    # wastedassign — 约束：写后未读的赋值。
+    #              场景：`x := 5; x = 10` 第二行实际从未读 x —— 笔误。
+    - wastedassign
+
+    # lll — 约束：单行最大列数（详见 settings：line-length 100）。
+    #       场景：与 revive line-length-limit 同阈值，双保险。
+    - lll
+
+    # ============== JSON / 序列化 ==============
+    # errchkjson — 约束：JSON tag 类型与字段类型不一致。
+    #            场景：`Status int \`json:"status"\`` 在 int=0 时反序列化为 0，
+    #                  而非预期的缺省。MarshalJSON/UnmarshalJSON 用法错误也会查。
+    - errchkjson
+
+    # durationcheck — 约束：禁止两个 time.Duration 相乘。
+    #              场景：`5 * time.Second * time.Second` 编译不报错但值完全错误，
+    #                    实际是纳秒平方而非 5 秒。零配置、零误报的纯安全网。
+    - durationcheck
+
+    # ============== import 分组 / 一致性 ==============
+    # grouper — 已关闭：单声明文件（如 errors.go 仅含 1 个 var）或声明紧邻
+    #         使用场景（如 configs/config.go 每个 struct 紧邻其 Load 函数）
+    #         下会破坏代码可读性；且 import 分组已有 gci + goimports + importas
+    #         三重保障，grouper 的 import 检查属重复劳动。
+    # - grouper
+
+    # importas — 约束：同一 import path 在不同文件里别名必须一致。
+    #           场景：`errors "github.com/pkg/errors"` 在 A 文件叫 errors，
+    #                 在 B 文件叫 pkgerr 是 bug。
+    - importas
+
+    # ============== 架构约束 ==============
+    # depguard — 约束：app / domain / infra 不得 import gin（ADR-012 兑底）。
+    #           场景：标准 linter 无法区分 entry handler 与 helper method，
+    #                 用三层与 gin 物理隔离，间接保证响应序列化只出现在 ports。
+    - depguard
+
+    # ============== 测试规范 ==============
+    # goprintffuncname — 约束：t.Logf / Errorf 应与测试函数名一致。
+    #                 场景：`t.Logf("%d", x)` 没有函数名前缀，
+    #                       多 case 输出无法区分。
+    - goprintffuncname
+
+    # usetesting — 约束：测试里用 os.Setenv / os.TempDir 等应改为 t.Setenv /
+    #            t.TempDir（自动 cleanup）。
+    #            场景：os.Setenv 不 cleanup 会污染后续测试。
+    #            注：v2.12.2 中 tenv 已合并入 usetesting。
+    - usetesting
+
+    # ============== struct / ctx 卫生 ==============
+    # containedctx — 约束：struct 不应嵌入 context.Context 字段。
+    #              场景：ctx 应作为参数显式传入；放 struct field 会导致
+    #                    "ctx 沿结构体传播"，可观测性与取消语义变差。
+    - containedctx
+
+    # ============== 编译器指令 / 字符串比较 ==============
+    # gocheckcompilerdirectives — 约束：`//go:directive` 注释语法合法性。
+    #                          场景：写错 directive 名（`//go:buld`）会
+    #                                被静默忽略。
+    - gocheckcompilerdirectives
+
+    # mirror — 约束：对称代码（A=mirror(B)）可使用 helper 抽取，
+    #         也覆盖 bytes/strings 用法优化（如 strings.Compare → ==）。
+    #         场景：`if a { x(); y() } else { y(); x() }` 应抽出公共块。
+    #               `strings.Compare(a, b) == 0` 应为 `a == b`。
+    #         注：v2.12.2 中 gocmperr 已被移除，等价语义由 mirror 覆盖。
+    - mirror
+
+  disable:
+    # ============== 与现有 linter 重复 / 重复工作 ==============
+    # cyclop — 与 gocognit 重复检查圈复杂度。
+    - cyclop
+
+    # gocyclo — 与 gocognit 重复检查圈复杂度。
+    - gocyclo
+
+    # grouper — 已关闭：单声明文件或声明紧邻使用场景下破坏可读性；
+    #         import 分组已有 gci + goimports + importas 三重保障。
+    - grouper
+
+    # ============== v2 默认开启但与本项目冲突的过严规则 ==============
+    # wsl_v5 — v2 默认开启的新 wsl 版本，对中文注释 / 长函数体内的空行
+    #         反复误报，本项目维持 v1 风格（无空行约束）。
+    - wsl_v5
+
+    # gofumpt — 注意：gofumpt 在 v2.12.2 已迁到 formatters，
+    #           不能放在 linters.disable（运行时会报 "gofumpt is a formatter"）。
+    #           本项目不启用 gofumpt（与 gci 的 import 分组约束冲突），
+    #           所以这里什么都不写——formatters 默认不开它。
+
+    # wrapcheck — 强制导出函数包装错误（`fmt.Errorf("...: %w", err)`），
+    #           与本项目 DDD app 层 "thin wrapper" 风格冲突：
+    #           app 层从 repo 拿到的错误不重包装，直接透传给 HTTP 层。
+    - wrapcheck
+
+    # err113 — 强制 errors.Is/As 比较 + 静态错误（errors.New 字面量）
+    #          替换为 `var ErrXxx = errors.New(...)`。
+    #          本项目既有 `errors.New("configs: ...")` 与 `fmt.Errorf` 的
+    #          校验错误模式已稳定，不需要强制重构为静态 sentinel。
+    - err113
+
+    # funcorder — 强制构造函数放在方法之前、私有方法放在导出方法之后。
+    #           与本项目现有文件布局（导出类型声明先于构造函数）冲突。
+    - funcorder
+
+    # ireturn — 强制构造函数返回具体类型（不允许返回 interface）。
+    #         本项目 DDD infra 层 `NewUserRepository(db) domain.UserRepository`
+    #         是依赖倒置的标准模式，不允许改。
+    - ireturn
+
+    # modernize — Go 1.25+ 的 interface{}→any 等现代化提示。
+    #           但本项目 `gormLogger.Info(... data ...interface{})` 是
+    #           GORM `logger.Interface` 接口签名约定，不能改。
+    - modernize
+
+    # noinlineerr — 禁用 `if err := f(); err != nil { ... }` 风格。
+    #             本项目惯用 if-init 短链，重构为 `err := f(); if err != nil { ... }`
+    #             反而冗长。
+    - noinlineerr
+
+    # nonamedreturns — 禁用命名返回值。
+    #               本项目 `func splitSeed(seed string) (username, password string, ok bool)`
+    #               等多返回场景依赖命名返回值增强可读性。
+    - nonamedreturns
+
+    # embeddedstructfieldcheck — mock 结构体嵌入字段必须先于普通字段。
+    #                       本项目 test fixture 的 `*mockBookRepo` 嵌入位置
+    #                       按业务逻辑组织，不按检查器要求。
+    - embeddedstructfieldcheck
+
+    # dogsled — 禁止 `_, _, _, _, err := f()` 多 blank identifier。
+    #         本项目测试场景下经常多返回值解包。
+    - dogsled
+
+    # godoclint — 报告位置不合理（指向文件 1:1 而非具体函数），且把多文档
+    #           文件的"多 godoc"也算违规，与本项目每个文件顶部有总览的
+    #           风格冲突。
+    - godoclint
+
+    # ============== 与本项目风格冲突（中文注释 / DDD 字段命名） ==============
+    # varnamelen — 变量名长度阈值会误伤 `i / j / x / ctx / id` 等惯用短名。
+    - varnamelen
+
+    # exhaustruct — 要求所有 struct 字面量填全字段。
+    #             与本项目 DTO 演化冲突：DTO 加字段时不想触发所有调用点修改。
+    - exhaustruct
+
+    # godot — 强制注释以 `.` 结尾，中文注释风格不需要。
+    - godot
+
+    # godox — 警告 TODO / FIXME，会误伤项目内的 planning 注释。
+    - godox
+
+    # nlreturn — 强制 return 前必须有空行，与本项目现有风格冲突。
+    - nlreturn
+
+    # wsl — v1 风格的 whitespace 检查，改动面过大。
+    - wsl
+
+    # ============== 配置 / 业务常量会触发 ==============
+    # mnd — magic number 检测（v2 重命名自 gomnd），会误伤
+    #       configs/*.go 的端口号 / 默认值与测试断言里的 200/404 数字。
+    - mnd
+
+    # goconst — 重复字符串提取常量。跨包共享的枚举字面量
+    #          （"silent"/"error"/"warn"/"info" 散布在 configs 与 logging）
+    #          提取收益低，反而增加耦合。
+    - goconst
+
+    # gomodguard — 不限制 import alias 集合。
+    - gomodguard
+
+    # gochecknoglobals — 误伤大量配置常量（configs / domain/vo/）。
+    - gochecknoglobals
+
+    # ============== 与 ORM 兼容问题 ==============
+    # rowserrcheck — GORM Session 关闭模式与该 linter 期望的 `rows.Close()`
+    #              模式不一定匹配。
+    - rowserrcheck
+
+    # sqlclosecheck — 同上。
+    - sqlclosecheck
+
+    # noctx — 启用后所有 Gin handler 都会因不显式 ctx 而报错，
+    #        本项目 ctx 由 middleware 注入而非 handler 显式接收。
+    - noctx
+
+    # ============== 暂不启用的检查 ==============
+    # iface — 抑制空接口误伤；接口设计由 ADR 治理。
+    - iface
+
+    # musttag — struct tag 强校验，目前没强制规范。
+    - musttag
+
+    # tagalign — struct tag 对齐风格暂未固化。
+    - tagalign
+
+    # tagliatelle — struct tag 命名约定暂未固化。
+    - tagliatelle
+
+    # paralleltest — 测试并行策略由 ADR 单独决定。
+    - paralleltest
+
+    # perfsprint — fmt 性能提示噪音多。
+    - perfsprint
+
+    # promlinter — Prometheus 度量命名规则暂未启用。
+    - promlinter
+
+    # reassign — 与 ineffassign 重复。
+    - reassign
+
+    # ============== 暂不需要 ==============
+    # dupl — 重复代码块；测试夹具里大量相似代码会误伤。
+    - dupl
+
+    # ginkgolinter — 不使用 Ginkgo 测试框架。
+    - ginkgolinter
+
+    # gosmopolitan — 时区 / locale 检查，本项目不强制。
+    - gosmopolitan
+
+    # makezero — `make([]T, 0)` vs `make([]T)` 强约束。
+    - makezero
+
+    # nestif — 嵌套 if 检测，与 gocognit / revive 部分重叠。
+    - nestif
+
+    # testableexamples — Godoc Example 函数可执行化检查。
+    - testableexamples
+
+    # testpackage — 允许测试与被测同包（white-box testing）。
+    - testpackage
+
+  # =====================================================================
+  # settings：单个 linter 的行为参数。
+  # 这里的每一项都在约束"linter 怎么跑"——阈值、白名单、黑名单、tag 过滤。
+  # =====================================================================
+  settings:
+
+    # ============== gocognit：认知复杂度阈值 ==============
+    # min-complexity — 约束：函数认知复杂度超过此值才报警。
+    #                  取值：15。比默认 30 明显收紧；
+    #                  与 revive cognitive-complexity 同阈值，避免双标准。
+    gocognit:
+      min-complexity: 15
+
+    # ============== funlen：函数长度 ==============
+    # lines — 约束：函数体超过多少行才报警。
+    #         取值：60 行（golangci-lint 默认值）。DDD 业务方法理想 20-30 行，
+    #              60 行是「必须拆分」的硬上限；原 80 行过于宽松。
+    # statements — 约束：函数体超过多少语句才报警。
+    #             取值：40 语句（golangci-lint 默认值）。与 lines 互补，
+    #                  防范一行多语句拼长函数；40 语句足以容纳多个职责。
+    # ignore-comments — 约束：是否计入注释行。
+    #                 取值：true。中文注释占比高，计入会误伤文档密度高的函数；
+    #                      注释质量由 revive / godoc 规则单独约束。
+    funlen:
+      lines: 60
+      statements: 40
+      ignore-comments: true
+
+    # ============== gocritic：通用体检 ==============
+    # enabled-tags — 约束：启用哪些 tag 分类的检查。
+    #   diagnostic : 诊断性检查（错别字、潜在 bug）
+    #   style      : 代码风格（命名、注释、变量）
+    #   performance: 性能提示（slice 容量、拷贝）
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+
+      # enabled-checks — 约束：在 3 个 tag（diagnostic / style / performance）
+      # 默认覆盖之外，还需要额外启用的高价值 gocritic check。
+      # 注：v2.12.2 中以下 check 已被对应 tag 默认启用，
+      #     此处不再冗余声明：exitAfterDefer / deferInLoop / ifElseChain /
+      #     singleCaseSwitch / switchTrue / boolExprSimplify / nilValReturn /
+      #     assignOp / indexAlloc / typeDefFirst / unnecessaryBlock /
+      #     stringConcatSimplify / octalLiteral / appendAssign / preferFprint /
+      #     preferStringWriter / captLocal / flagDeref / emptyStringTest /
+      #     evalOrder / newDeref / weakCond / builtinShadow / dupBranchBody /
+      #     dupCase / dupSubExpr / emptyFallthrough / exposedSyncMutex /
+      #     mapKey / preferFilepathJoin / initClause
+      enabled-checks: []
+
+      # disabled-checks — 约束：单独关掉的检查项。
+      # hugeParam       — 函数形参拷贝大 struct 在 DTO 层很常见，
+      #                   报告 50+ 处误伤。
+      # rangeValCopy    — range 内 struct 拷贝误报多，本项目 DTO 是
+      #                   值类型而非指针集合。
+      # sloppyReassign  — `x = x` 自赋值检查，价值低。
+      # commentedOutCode — 注释里的代码块是项目常见的规划注释。
+      # importShadow    — 与 predeclared linter 重复。
+      # docStub         — 注释以 "Comment ..." 起头的旧约定，本项目不用。
+      # unnamedResult   — 多个返回值不强制命名。
+      # paramTypeCombine — 相邻同类型参数不强制合并。
+      # httpNoBody      — 测试场景下用 nil body 是有意为之。
+      # dupArg          — 重复参数检查误报多。
+      # typeAssertChain — 类型断言链误报多。
+      # yodaStyleExpr   — yoda 表达式风格不在本项目规范。
+      # dynamicFmtString — 动态 fmt 字符串误报多。
+      # hexLiteral      — 十六进制字面量大小写不重要。
+      # methodCallChain — 方法链深度与 DTO builder 模式冲突。
+      # nestingReduce   — 与 gocognit / revive.max-control-nesting 重复。
+      # redundantSprint — 误报多。
+      # regexpSimplify  — 正则简化价值低。
+      # ruleguard       — 自定义规则引擎，本项目不引入。
+      # ptrToRefParam   — 指针参数建议与 DDD 聚合根模式冲突。
+      # specialCase     — 与业务异常处理模式冲突。
+      # switchDefault   — 与 exhaustive 重复。
+      # tooLongPrint    — 过长 fmt.Print 实际很少出现。
+      # tooManyArgs     — 与 revive.argument-limit 重复。
+      # typeSwitchVar   — 类型 switch 变量风格不重要。
+      # underef         — 取消引用建议价值低。
+      # unslice         — 切片操作建议价值低。
+      # valSwap         — 值交换风格不重要。
+      # weakCrypto      — 与 gosec 重叠（gosec G404 / G501）。
+      # wrapperFunc      — 包装函数建议与适配器模式冲突。
+      disabled-checks:
+        - hugeParam
+        - rangeValCopy
+        - sloppyReassign
+        - commentedOutCode
+        - importShadow
+        - docStub
+        - unnamedResult
+        - paramTypeCombine
+        - httpNoBody
+        - dupArg
+        - typeAssertChain
+        - yodaStyleExpr
+        - dynamicFmtString
+        - hexLiteral
+        - nestingReduce
+        - redundantSprint
+        - regexpSimplify
+        - ruleguard
+        - ptrToRefParam
+        - typeSwitchVar
+        - underef
+        - unslice
+        - valSwap
+        - wrapperFunc
+
+    # ============== revive：替代 golint 的现代 lint ==============
+    # severity — 约束：所有 revive 报告的默认严重级别。
+    revive:
+      severity: warning
+
+      # enable-all-rules — 约束：是否启用 revive 所有内置规则（含额外项）。
+      #                  启用：本项目要覆盖“常见代码规范”全集，
+      #                  不启用的项需在下面 disabled: true 明确禁用。
+      enable-all-rules: true
+
+      # rules — 约束：每条 revive 规则的具体配置。
+      # 下文按 11 个规范分类组织：命名 / 控制流 / 错误处理 / 资源管理 /
+      # 并发 / 类型与结构 / 导入 / 可读性 / 性能与现代化 / 测试 / 其他。
+      rules:
+
+        # ===================== 命名规范 =====================
+        # receiver-naming — 约束：接收器名一致性（同类型方法必须同名）。
+        #                 场景：方法接收器 `s *Service` / `svc *Service` 混用
+        #                       会破坏 reader mental model。默认启用。
+        - name: receiver-naming
+          severity: warning
+
+        # error-naming — 约束：错误变量必须 Err 前缀。
+        #              场景：errors.Is 通过名字识别错误，名称不规范会错误匹配。
+        - name: error-naming
+          severity: warning
+
+        # error-return — 约束：error 必须作为最后一个返回值。
+        #              场景：违反 Go 社区约定会让调用者写错顺序。
+        - name: error-return
+          severity: error
+
+        # redefines-builtin-id — 约束：禁止重定义内建标识符。
+        #                      场景：`i := 0; i := 1` 或参数 `make` 是常见 bug。
+        - name: redefines-builtin-id
+          severity: error
+
+        # unexported-return — 约束：公共函数不返回未导出类型。
+        #                   场景：返回私有类型会迫使调用者断言，违反 API 可用性。
+        - name: unexported-return
+          severity: warning
+
+        # unexported-naming — 约束：未导出符号命名格式（避免下划线 / 混合大小写）。
+        - name: unexported-naming
+          severity: warning
+
+        # import-alias-naming — 约束：import alias 命名规范。
+        - name: import-alias-naming
+          severity: warning
+
+        # redundant-import-alias — 约束：检测冗余 import alias。
+        #                       场景：`import alias "alias"` 当 alias == path 最后一段。
+        - name: redundant-import-alias
+          severity: warning
+
+        # package-directory-mismatch — 约束：包名与目录名一致。
+        #                           场景：`package foo` 在 `bar/` 下会让 import 混乱。
+        - name: package-directory-mismatch
+          severity: warning
+
+        # package-naming — 约束：包名应为小写、无下划线、不含大写。
+        - name: package-naming
+          severity: warning
+
+        # dot-imports — 约束：禁止 dot import（除 testing 等特殊情况）。
+        # （已在「导入」段复述；重复登记以提示维护者。）
+        # receiver-naming — 约束：接收器名一致性（同类型方法必须同名）。
+        # （已在命名段头复述。）
+
+        # ===================== 控制流补充 =====================
+        # early-return — 已在命名/控制流段位；此处补充定位。
+        # if-return — 同上。
+        # max-control-nesting — 同上。
+        # identical-branches — 同上。
+        # identical-ifelseif-branches — 同上。
+        # identical-ifelseif-conditions — 同上。
+        # identical-switch-branches — 同上。
+        # identical-switch-conditions — 同上。
+        # deep-exit — 同上。
+        # superfluous-else — 同上。
+
+        # 补充段：v2 修订后名（曾名 defer-recover / empty-fallthrough / no-var-funcs
+        # / nesting 等不存在的 rule 已删除；等价的语义由其他 rule 覆盖）。
+        # indent-error-flow — 约束：happy path 与 error path 同缩进。
+        #                 场景：与 early-return / if-return 互补。
+        - name: indent-error-flow
+          severity: warning
+
+        # empty-block — 约束：空块（如 `if x {}`）。
+        #             场景：疑似逻辑遗漏。
+        - name: empty-block
+          severity: warning
+
+        # unreachable-code — 约束：return / panic 等之后的不可达代码。
+        #                场景：`return; fmt.Println("x")` 后者不会跑。
+        - name: unreachable-code
+          severity: error
+
+        # useless-fallthrough — 约束：fallthrough 后无逻辑的 switch case。
+        #                   v2 提供。与 gocritic.emptyFallthrough 互补。
+        - name: useless-fallthrough
+          severity: warning
+
+        # ---------------- 已禁用项（保留以记录决策） ----------------
+        # var-naming — 约束：变量 / 常量命名规范。
+        #             关闭：本项目允许 DDD 短名（id / ctx / svc / args）。
+        - name: var-naming
+          disabled: true
+
+        # exported — 约束：导出符号必须以符号名起头写 godoc。
+        #          关闭：中文导出符号的 godoc 格式由项目约定保障。
+        - name: exported
+          disabled: true
+
+        # package-comments — 约束：每个包至少一个 godoc。
+        #                  关闭：单文件包注释不在每个子包强制。
+        - name: package-comments
+          disabled: true
+
+        # ===================== 控制流 =====================
+        # early-return — 约束：逆向条件应提取为 early return。
+        #             场景：减少嵌套深度，符合 Martin Fowler 《重构》卫语句。
+        - name: early-return
+          severity: warning
+
+        # if-return — 约束：else 分支只是 return / continue / break。
+        #          场景：应改为 early-return 模式。
+        - name: if-return
+          severity: warning
+
+        # max-control-nesting — 约束：控制嵌套深度上限。
+        #                    arguments: [最大嵌套深度]
+        #                    取值：4——超过 4 层 if/for/switch 嵌套难以阅读，
+        #                          且通常会同时触发 gocognit / cognitive-complexity。
+        - name: max-control-nesting
+          arguments: [4]
+          severity: warning
+
+        # identical-branches — 约束：if/else 两分支体相同。
+        #                   场景：逻辑错误，2 个分支应该合并。
+        - name: identical-branches
+          severity: error
+
+        # identical-switch-branches — 约束：switch 多个 case 体相同。
+        - name: identical-switch-branches
+          severity: error
+
+        # identical-ifelseif-branches — 约束：if/else if 分支体相同。
+        - name: identical-ifelseif-branches
+          severity: error
+
+        # identical-ifelseif-conditions — 约束：if/else if 条件相同。
+        - name: identical-ifelseif-conditions
+          severity: error
+
+        # identical-switch-conditions — 约束：switch 多个 case 条件相同。
+        - name: identical-switch-conditions
+          severity: error
+
+        # deep-exit — 约束：深层 exit（panic/os.Exit 在多级函数中）。
+        #         场景：难以追踪控制流。
+        - name: deep-exit
+          severity: warning
+
+        # superfluous-else — 约束：if 提前 return 后仍有冗余 else。
+        - name: superfluous-else
+          severity: warning
+
+        # ===================== 错误处理 =====================
+        # error-strings — 约束：错误字符串不应以标点 / 大写字母结尾。
+        #              场景：`errors.New("xxx.")` 与 `fmt.Errorf` 拼接顺序难控制。
+        - name: error-strings
+          severity: warning
+
+        # errorf — 约束：错误包装应使用 errors.New / fmt.Errorf("...: %w", err)。
+        - name: errorf
+          severity: warning
+
+        # use-errors-new — 约束：无格式需求的 error 应使用 errors.New。
+        #               场景：fmt.Errorf 无占位符会被发现。
+        - name: use-errors-new
+          severity: warning
+
+        # unhandled-error — 约束：fmt.Print* 系列之外的 error 必须处理。
+        #               arguments: [排除函数列表]
+        - name: unhandled-error
+          arguments:
+            - fmt.Print
+            - fmt.Printf
+            - fmt.Println
+            - fmt.Fprint
+            - fmt.Fprintf
+            - fmt.Fprintln
+          severity: warning
+
+        # ===================== 资源管理 =====================
+        # defer — 约束：defer 调用顺序、参数立即求值等。
+        #       场景：`defer f(x)` 中 x 必须立即求值，防止 defer 在循环中误用。
+        - name: defer
+          severity: warning
+
+        # context-as-argument — 约束：使用 context 但未接收 context 参数。
+        #                    场景：背景函数引用 ctx 但形参里没有。
+        - name: context-as-argument
+          severity: error
+
+        # context-keys-type — 约束：context key 必须是未导出类型。
+        #                  场景：用 string 作为 ctx key 会造成包间冲突。
+        - name: context-keys-type
+          severity: error
+
+        # modifies-parameter — 约束：函数不应修改其形参（指针参数除外）。
+        #                  场景：`func foo(x int) { x++ }` 应明确用指针。
+        - name: modifies-parameter
+          severity: warning
+
+        # modifies-value-receiver — 约束：值接收器不应被修改。
+        #                      场景：`func (s S) F() { s.x = 1 }` 修改是无效的。
+        - name: modifies-value-receiver
+          severity: warning
+
+        # range-val-address — 约束：range val 不能取地址（Go 1.22 前是 bug）。
+        #                 场景：`for _, v := range s { p := &v }`——所有指针指向同一变量。
+        - name: range-val-address
+          severity: warning
+
+        # range-val-in-closure — 约束：range val 不应在闭包内使用。
+        #                     场景：闭包捕获循环变量，与上面同源问题。
+        - name: range-val-in-closure
+          severity: warning
+
+        # ===================== 并发 =====================
+        # atomic — 约束：sync/atomic 使用规范。
+        - name: atomic
+          severity: warning
+
+        # call-to-gc — 约束：禁止手动调用 runtime.GC。
+        - name: call-to-gc
+          severity: warning
+
+        # use-waitgroup-go — 约束：Go 1.25+ 用 wg.Go() 替代 wg.Add(1) + go func()。
+        #                 场景：新增的 wg.Go() 会自动管理计数器，避免漏 Done。
+        - name: use-waitgroup-go
+          severity: warning
+
+        # waitgroup-by-value — 约束：WaitGroup 必须传值不传指针。
+        - name: waitgroup-by-value
+          severity: warning
+
+        # forbidden-call-in-wg-go — 约束：wg.Go() 内禁止的调用。
+        - name: forbidden-call-in-wg-go
+          severity: warning
+
+        # datarace — 约束：潜在数据竞争。
+        - name: datarace
+          severity: warning
+
+        # ===================== 类型与结构 =====================
+        # time-equal — 约束：time 比较应使用 Sub / Before / After。
+        #           场景：`t1 == t2` 受 monotonic clock 影响，不可靠。
+        - name: time-equal
+          severity: warning
+
+        # time-naming — 约束：time / context 等类型命名约定。
+        #             场景：变量名含 `time` 但不是 time.Time。
+        - name: time-naming
+          severity: warning
+
+        # time-date — 约束：time.Now().Format("2006-01-02") 的字面量使用。
+        - name: time-date
+          severity: warning
+
+        # string-of-int — 约束：避免 strconv.Itoa 后直接比较。
+        #              场景：`strconv.Itoa(x) == "5"` 应为 `x == 5`。
+        - name: string-of-int
+          severity: warning
+
+        # string-format — 约束：strings.HasPrefix / Trim / Index 等应走 strings 包。
+        - name: string-format
+          severity: warning
+
+        # struct-tag — 约束：struct tag 格式（json/toml 等）。
+        - name: struct-tag
+          severity: warning
+
+        # range — 约束：range 内不应修改切片 / map。
+        #       场景：`for _, v := range m { m[k] = v }` 是未定义行为。
+        - name: range
+          severity: warning
+
+        # unused-receiver — 约束：未使用的接收器。
+        #                场景：保留未使用接收器会误导 reader；应删除参数。
+        - name: unused-receiver
+          severity: warning
+
+        # confusing-naming — 约束：函数名与包名 / 参数名混淆。
+        - name: confusing-naming
+          severity: warning
+
+        # confusing-results — 约束：返回值类型同名但不同类型会调用方误用。
+        #                 场景：`(int, error)` 与 `(string, error)` 同名返回。
+        - name: confusing-results
+          severity: warning
+
+        # unchecked-type-assertion — 约束：类型断言必须检查 ok。
+        #                        场景：`v := x.(T)` 会 panic。
+        - name: unchecked-type-assertion
+          severity: warning
+
+        # ---------------- 已禁用项（保留以记录决策） ----------------
+        # unused-parameter — 约束：未使用参数。
+        #                  关闭：本项目接口 / mock 函数需要保留全部形参。
+        - name: unused-parameter
+          disabled: true
+
+        # ===================== 导入 =====================
+        # blank-imports — 约束：blank import 必须有 godoc 注释说明用途。
+        - name: blank-imports
+          severity: warning
+
+        # dot-imports — 约束：禁止 dot import（除 testing 等特殊情况）。
+        - name: dot-imports
+          severity: warning
+
+        # duplicated-imports — 约束：同一路径不应重复 import。
+        - name: duplicated-imports
+          severity: warning
+
+        # import-shadowing — 约束：import 别名不应遮蔽标准库标识符。
+        - name: import-shadowing
+          severity: warning
+
+        # ===================== 可读性补充 =====================
+        # comment-spacings — 已在「可读性」段位；此处补充定位。
+        # unnecessary-stmt — 同上。
+        # useless-break — 同上。
+        # var-declaration — 同上。
+        # bare-return — 同上。
+
+        # add-constant — 约束：重复出现的 magic number / string 应提取为常量。
+        #             arguments: maxLitCount="3"——出现 3 次以上的字面量应提为常量。
+        #             注：v2.12.2 revive 版本要求数组格式。
+        - name: add-constant
+          arguments:
+            - maxLitCount: "3"
+          severity: warning
+
+        # get-return — 已关闭：简单 getter 上添加强制命名返回值仅增加冗余噪音，
+        #           且可能引诱使用裸 return，违背 Google Go Style Guide 对裸 return
+        #           的明确反对。
+        #           v2 重命名（曾名 getter）。
+        - name: get-return
+          disabled: true
+
+        # increment-decrement — 约束：`i += 1` / `i -= 1` 应为 `i++` / `i--`。
+        #                  场景：Go 社区惯用 i++ 形式。
+        - name: increment-decrement
+          severity: warning
+
+        # ---------------- 补充备注 ----------------
+        # 以下 v1 版本的 rule 在 v2.12.2 中已移除，本项目不再启：
+        #   assign                       — 检测 `x = x` 自赋值（v2 移除）
+        #   prefer-string-replacer       — strings.NewReplacer 检查（v2 移除）
+        #   regex-must-not-be-empty      — 空正则检查（v2 移除）
+        #   reserved-words               — Go 关键字检查（v2 移除）
+        #   top-level-error              — pkg-level error 命名（v2 移除）
+        #   unnecessary-ellipsis         — `...string{}` 检查（v2 移除）
+        # 等价语义如需可考虑 enable gocritic 中的 regexpMust / stringConcatSimplify / regexPattern。
+
+        # ===================== 可读性 =====================
+        # comment-spacings — 约束：注释格式（// 后空格、godoc 缩进等）。
+        - name: comment-spacings
+          severity: warning
+
+        # unnecessary-stmt — 约束：函数体内冗余语句。
+        #                 场景：`return` 后还有 `return`。
+        - name: unnecessary-stmt
+          severity: warning
+
+        # useless-break — 约束：case 内最后一句是 break。
+        #               场景：Go 默认不 fallthrough，break 是冗余。
+        - name: useless-break
+          severity: warning
+
+        # var-declaration — 约束：变量声明风格（:= vs var）。
+        #                场景：能用 := 的不要 var。
+        - name: var-declaration
+          severity: warning
+
+        # bare-return — 约束：裸 return（gofmt 视角下也保留命名返回值语义）。
+        #            场景：长函数 + 裸 return 让 reader 难以跟踪变量最终值。
+        - name: bare-return
+          severity: warning
+
+        # ===================== 性能与现代化（Go 1.25+） =====================
+        # use-any — 约束：用 any 替代 interface{}。
+        #         场景：本项目 GORM logger.Interface 是签名约定，豁免。
+        #         （如需启用，仅在 application 层使用，接口实现处 //nolint）
+        - name: use-any
+          severity: warning
+
+        # use-slices-sort — 约束：用 slices.Sort 替代 sort.Strings。
+        - name: use-slices-sort
+          severity: warning
+
+        # optimize-operands-order — 约束：操作数顺序优化（如 `0 == x` vs `x == 0`）。
+        - name: optimize-operands-order
+          severity: warning
+
+        # ===================== 测试 =====================
+        # redundant-test-main-exit — 约束：TestMain 必须有 os.Exit 调用。
+        - name: redundant-test-main-exit
+          severity: warning
+
+        # ===================== 其他 =====================
+        # bool-literal-in-expr — 约束：`if x == true` 应为 `if x`。
+        - name: bool-literal-in-expr
+          severity: warning
+
+        # constant-logical-expr — 约束：`if true` / `if !false` 等常量条件。
+        - name: constant-logical-expr
+          severity: error
+
+        # unconditional-recursion — 约束：函数无条件递归调用自身。
+        #                       场景：栈溢出 bug。
+        - name: unconditional-recursion
+          severity: error
+
+        # ---------------- 补充备注 ----------------
+        # 以下 v1 rule 在 v2.12.2 中已移除，本项目不启用：
+        #   reexport                 — 内部包 re-export 转发检查（v2 移除）
+        #   weak-transitive-import   — 未显式 import 的传递依赖（v2 移除）
+        # 如需检测传递依赖，用 go.mod + gomodguard / gomoddirectives。
+
+        # ===================== 代码风格度量 =====================
+        # file-length-limit — 约束：源文件超过多少行报警。
+        #                   arguments 是 kv map：max / skipComments / skipBlank。
+        #                   取值：max=400 行。超过应拆包或拆文件；
+        #                   skipComments=true——中文注释占比高，
+        #                   skipBlank=true——空行不计。
+        - name: file-length-limit
+          arguments:
+            - max: 400
+              skipComments: true
+              skipBlank: true
+          severity: warning
+
+        # function-length — 已关闭（enable-all-rules 下必须显式 disable）。
+        #                   原因：与 funlen 指标重复，且 revive 的参数顺序是
+        #                   [最大语句数, 最大行数]、注释也计入行数，
+        #                   与 funlen(ignore-comments) 语义冲突。
+        #                   函数长度统一由 funlen 约束，避免出现两套标准。
+        - name: function-length
+          disabled: true
+
+        # function-result-limit — 约束：返回值数量上限。
+        #                     arguments: [最大数量]
+        #                     取值：3（revive 默认值）。超过应返回 struct 或拆分调用。
+        - name: function-result-limit
+          arguments: [3]
+          severity: warning
+
+        # argument-limit — 约束：函数形参数量上限。
+        #                arguments: [最大参数数]
+        #                取值：4。DDD 聚合根构造函数遵从此约束；
+        #                超过应该用 Options struct 或 Parameter Object。
+        #                注：argument-limit 是全局硬约束，本仓库不允许任何路径豁免
+        #                （#25 决策）。如遇 4+ 参数的函数，统一走 Command struct 模式。
+        - name: argument-limit
+          arguments: [4]
+          severity: warning
+
+        # line-length-limit — 约束：行长度上限（与 lll 互补）。
+        #                  arguments: [最大列数]
+        #                  取值：100。与 lll 取同一阈值，双保险。
+        - name: line-length-limit
+          arguments: [100]
+          severity: warning
+
+        # cognitive-complexity — 约束：认知复杂度上限（与 gocognit 互补）。
+        #                     gocognit 与 cognitive-complexity 都在度量认知复杂度，
+        #                     两者实现略有差异，同阈值可互相补充。
+        #                     arguments: [最大复杂度]
+        #                     取值：15。与 gocognit 15 对齐，避免双标准。
+        - name: cognitive-complexity
+          arguments: [15]
+          severity: warning
+
+        # max-public-structs — 约束：单包导出 struct / interface 上限。
+        #                   arguments: [最大数量]
+        #                   取值：10。超过应拆子包（领域内聚）。
+        - name: max-public-structs
+          arguments: [10]
+          severity: warning
+
+    # ============== lll：行宽 ==============
+    # line-length — 约束：单行最大列数；与 revive line-length-limit 一致。
+    lll:
+      line-length: 100
+
+    # ============== govet：标准库 go vet 检查集 ==============
+    # enable — 约束：额外开启的 govet check。
+    #         shadow：禁止 `err` 等变量在嵌套作用域被遮蔽。
+    govet:
+      enable:
+        - shadow
+
+      # enable-all — 约束：是否启用所有未显式列出的 govet check。
+      #            关闭：只跑上面 enable 列出的，fieldalignment 已全局禁用。
+      enable-all: false
+
+    # ============== depguard：包导入反向约束 ==============
+    # 兑底 ADR-012 决策 4「entry-handler-only 原则的 lint 兑底」。
+    # 原则全文：c.JSON / c.String / c.Status 等响应序列化只能出现在
+    # ports 层的 entry handler 直接 body 中，helper method 不得调 c.X。
+    # 标准 linter 无法区分「entry handler」 vs 「helper method」，
+    # 这里用更强的约束——internal 下的 app / domain / infra 三层
+    # 物理隔离 gin，间接保证它们不调 c.X。
+    #
+    # files 兑底哪些路径被本规则检查。规则：
+    #   - depguard 按绝对路径做 doublestar 匹配，模式必须以 **/ 开头；
+    #     否则 "internal/..." 匹配不到 "/abs/path/internal/..."（实测）。
+    #   - 匹配 internal 下任何含 /app/、/domain/、/infra/ 路径段的包。
+    #   - ports / router / httpx 不被规则作用（正常 import gin）。
+    #
+    # deny 兑底禁止哪些 package。
+    #   - github.com/gin-gonic/gin 是唯一的例外依赖。
+    depguard:
+      rules:
+        no_gin_in_inner_layers:
+          files:
+            - "**/internal/**/app/**"
+            - "**/internal/**/domain/**"
+            - "**/internal/**/infra/**"
+          deny:
+            - pkg: "github.com/gin-gonic/gin"
+              desc: "ADR-012: app/domain/infra 不得 import gin（响应序列化只能由 ports entry handler 发出）"
+
+    # ============== gosec：安全扫描 ==============
+    gosec:
+      # severity — 约束：报告最低严重级别（low 包含所有）。
+      severity: low
+
+      # confidence — 约束：报告最低置信度（low 包含所有）。
+      confidence: low
+
+      # excludes — 约束：哪些子检查规则被跳过。
+      # 详细理由见下：
+      excludes:
+        # G101 — dev 环境默认密码本就是明文常量
+        #        （crawler_dev_pwd_change_me / redis_dev_pwd_change_me），
+        #        生产由 env/*.local.toml 覆盖。
+        - G101
+        # G104 — os.ReadFile / OpenFile 的路径在所有调用点都来自受
+        #        信任的 toml 配置 / flag 参数，无注入风险。
+        - G104
+        # G115 — uint32(int) 在 argon2id 参数转换上下文里值可控。
+        - G115
+        # G301 — 日志目录权限 0o755 是期望值（容器内读权限）。
+        - G301
+        # G304 — 同 G104 理由，路径来源受信。
+        - G304
+        # G124 — 测试 mock http.Cookie 不需要 Secure / HttpOnly /
+        #        SameSite 等生产属性。
+        - G124
+        # 未排除的 G112（http.Server 缺 ReadHeaderTimeout）是真问题，
+        # 应在代码侧修复，不在本配置豁免。
+
+    # ============== errcheck：错误返回检查 ==============
+    errcheck:
+      # check-blank — 约束：是否检查 `_ = f()` 模式忽略的错误。
+      #              启用：本项目不允许显式吞咽 error。
+      check-blank: true
+
+      # check-type-assertions — 约束：是否检查类型断言。
+      #                        启用：`v, _ := x.(T)` 也算未检查。
+      check-type-assertions: true
+
+      # disable-default-exclusions — 约束：是否禁用 errcheck 自带豁免列表。
+      #                            关闭：保留默认豁免（如 fmt.Print*）。
+      disable-default-exclusions: false
+
+      # exclude-functions — 约束：哪些函数即便返回 error 也不检查。
+      #                  场景：测试 helper 用 Fatal 直接终止进程，
+      #                        返回的 error 永远不会被消费。
+      exclude-functions:
+        - (*testing.T).Fatal
+        - (*testing.T).Fatalf
+        - (*testing.T).Skip
+        - (*testing.T).Skipf
+        - (*testing.B).Fatal
+        - (*testing.B).Fatalf
+
+    # ============== thelper：测试 helper 检查 ==============
+    # v2 thelper schema：按 helper 函数形式分组（test/benchmark/tb），
+    # 每组下三选一：first / name / begin —— 表达 helper 必须首句调用、
+    # 必须以 Helper 结尾、必须在 Begin 之前等约束。
+    # test.first — 约束：T.Helper() 必须是 *testing.T 函数的第 1 句有效语句。
+    # test.name  — 约束：helper 函数名必须以 `Helper` 结尾。
+    # test.begin — 约束：Helper() 必须在 Reset / Setenv / Cleanup 等之前调用。
+    thelper:
+      test:
+        first: true
+        name: true
+        begin: true
+      benchmark:
+        first: true
+        name: true
+        begin: true
+      tb:
+        first: true
+        name: true
+        begin: true
+
+    # ============== prealloc：slice 预分配提示 ==============
+    prealloc:
+      # simple — 约束：是否检查明显可推导容量的循环。
+      simple: true
+
+      # range-loops — 约束：是否检查 range 循环。
+      range-loops: true
+
+      # for-loops — 约束：是否检查传统 for 循环。
+      #           关闭：传统 for 循环的容量推导容易误报。
+      for-loops: false
+
+    # ============== unparam：未使用参数检查 ==============
+    unparam:
+      # check-exported — 约束：是否对导出函数也查未使用参数。
+      #                启用：导出 API 也要保证参数有效。
+      check-exported: true
+
+  # =====================================================================
+  # exclusions：按路径豁免。
+  # 这些 linter 都仍然全局启用，只在下面匹配的路径下不跑。
+  # =====================================================================
+  exclusions:
+    rules:
+      # ---- 测试文件整体豁免 ----
+      # 约束：以下 linter 在 _test.go 文件上不跑。
+      - path: _test\.go
+        linters:
+          # gocognit — 测试场景下允许稍长的子测试表。
+          - gocognit
+          # funlen — 测试函数的 table-driven 用例数决定长度，不应被行数限制。
+          - funlen
+          # prealloc — 测试夹具的预分配优化价值低。
+          - prealloc
+
+      # ---- 测试文件 add-constant 豁免 ----
+      # revive add-constant 在测试固件中过于嘈杂：
+      # "1"/"2"/"3" 当测试 ID、"2026" 当固定时间戳是正常模式，
+      # 提取为常量反而降低可读性。
+      - path: _test\.go
+        text: "add-constant"
+
+      # ---- 组合根路径豁免 ----
+      # 约束：以下 linter 在 internal/runtime/ 上不跑。
+      - path: internal/runtime/
+        linters:
+          # gocognit — 组合根是 4 步装配 + cleanup + seed 流，
+          # 逻辑分叉是必然产物，强制拆函数反而会破坏 narrative。
+          - gocognit
+
+# =====================================================================
+# Formatters：与 linters 解耦，golangci-lint v2 独立运行。
+# 这里约束的是"代码风格自动修复"——gofmt 与 goimports。
+# =====================================================================
+formatters:
+  enable:
+    # gofmt — 约束：标准库官方格式化器，强制 go 风格统一（tab / 空行 / 操作符间距）。
+    - gofmt
+
+    # goimports — 约束：在 gofmt 基础上自动 import 排序与去重。
+    #            跑在 gofmt 之后，自动处理未使用 / 缺失的 import。
+    - goimports
+
+    # gci — 约束：import 强制 3 组（标准库 / 第三方 / 本项目）且每组内按字典序。
+    #       场景：与 goimports 互补——goimports 只排序，gci 强制分组。
+    #             gci 是 formatter，必须在 formatters.enable 下启用，
+    #             不能放在 linters.enable（会报 "gci is a formatter"）。
+    - gci
+
+  settings:
+    # goimports 配置 — local-prefixes 约束：哪些 import 路径被识别为
+    # "本项目"（分组排序时单独一组）。
+    goimports:
+      local-prefixes:
+        # 取值：euler —— 所有以此前缀开头的 import
+        #       会被归入"本项目"组，与标准库 / 第三方库分开。
+        - euler
+
+    # gci 配置 — v2 中 settings 必须放在 formatters 下，不是 linters 下。
+    # sections 约束：import 分组顺序与内容。
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(euler)
+
+  exclusions:
+    # paths — 约束：哪些路径不跑 formatters（自动修复时跳过）。
+    #       场景：自动生成的文件（protobuf / 模板渲染 / mock）通常
+    #             不应被 gofmt 修改。
+    paths:
+      # .pb.go   — protobuf 生成代码。
+      - ".*\\.pb\\.go$"
+      # .gen.go  — 模板生成代码。
+      - ".*\\.gen\\.go$"
+      # _mock.go — mock 生成代码。
+      - ".*_mock\\.go$"

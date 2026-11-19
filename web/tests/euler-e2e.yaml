@@ -1,0 +1,4 @@
+listen: 127.0.0.1:18080
+workspace_root: /tmp/euler-e2e-workspaces
+allowed_origins:
+  - http://127.0.0.1:18080

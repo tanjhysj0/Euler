@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: euler
+      POSTGRES_USER: euler
+      POSTGRES_PASSWORD: euler
+    ports:
+      - "5432:5432"
+    volumes:
+      - euler-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U euler"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  euler-postgres:

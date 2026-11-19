@@ -1,0 +1,33 @@
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+.session-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+}
+
+.session-sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.session-sidebar-item {
+  cursor: pointer;
+  border-radius: 6px;
+  padding-inline: 8px;
+}
+
+.session-sidebar-item.active {
+  background: rgba(22, 119, 255, 0.08);
+}
+
+.session-sidebar-path {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
