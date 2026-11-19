@@ -1,0 +1,13 @@
+job_name: euler-harbor-coding-euler
+jobs_dir: harbor_eval/results
+n_concurrent_trials: 1
+tasks:
+  - path: harbor_eval/tasks/cancel-async-tasks
+agents:
+  - import_path: agents.euler_agent:EulerAgent
+environment:
+  type: docker
+  mounts:
+    - type: bind
+      source: /tmp/euler-harbor/workspace
+      target: /app
