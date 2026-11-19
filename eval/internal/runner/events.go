@@ -62,7 +62,7 @@ func (c *Client) consume(
 		return "", after, err
 	}
 	request.Header.Set("Accept", "text/event-stream")
-	response, err := c.httpClient.Do(request)
+	response, err := c.sseClient.Do(request)
 	if err != nil {
 		return "", after, err
 	}
@@ -130,6 +130,11 @@ func (c *Client) poll(ctx context.Context, runID string, metrics *runMetrics) (s
 		}
 		metrics.toolCalls = len(snap.ToolCalls)
 		metrics.approvals = len(snap.Approvals)
+		for _, approval := range snap.Approvals {
+			if approval.Status == "pending" && approval.ID != "" {
+				c.approve(approval.ID) // 重复批准返回 409 会被忽略
+			}
+		}
 		switch snap.Run.Status {
 		case "succeeded":
 			return "run.completed", nil
@@ -137,6 +142,8 @@ func (c *Client) poll(ctx context.Context, runID string, metrics *runMetrics) (s
 			return "run.failed", nil
 		case "cancelled":
 			return "run.cancelled", nil
+		case "interrupted":
+			return "run.interrupted", nil
 		}
 		select {
 		case <-ctx.Done():

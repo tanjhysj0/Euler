@@ -102,6 +102,63 @@ func TestRunTaskAutoApprovesAndExtractsPatch(t *testing.T) {
 	if pred.Meta.Approvals != 1 || pred.Meta.ToolCalls != 1 {
 		t.Fatalf("meta = %+v", pred.Meta)
 	}
+	if pred.Meta.DurationMS <= 0 {
+		t.Fatalf("duration_ms = %d, want > 0", pred.Meta.DurationMS)
+	}
+}
+
+func TestPollApprovesPendingApproval(t *testing.T) {
+	var approved atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/runs/r1", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"run":{"status":"succeeded"},"tool_calls":[],"approvals":[{"id":"a1","status":"pending"}]}`)
+	})
+	mux.HandleFunc("/api/v1/approvals/a1/decision", func(w http.ResponseWriter, _ *http.Request) {
+		approved.Add(1)
+		_, _ = fmt.Fprint(w, `{}`)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := &Client{
+		baseURL:    server.URL,
+		jsonClient: server.Client(),
+		sseClient:  server.Client(),
+	}
+	var metrics runMetrics
+	terminal, err := client.poll(context.Background(), "r1", &metrics)
+	if err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if terminal != "run.completed" {
+		t.Fatalf("terminal = %s, want run.completed", terminal)
+	}
+	if approved.Load() != 1 {
+		t.Fatalf("审批次数 = %d, want 1", approved.Load())
+	}
+}
+
+func TestPollMapsInterrupted(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/runs/r1", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"run":{"status":"interrupted"},"tool_calls":[],"approvals":[]}`)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := &Client{
+		baseURL:    server.URL,
+		jsonClient: server.Client(),
+		sseClient:  server.Client(),
+	}
+	var metrics runMetrics
+	terminal, err := client.poll(context.Background(), "r1", &metrics)
+	if err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if terminal != "run.interrupted" {
+		t.Fatalf("terminal = %s, want run.interrupted", terminal)
+	}
 }
 
 func TestRunTaskTimeoutCancels(t *testing.T) {

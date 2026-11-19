@@ -23,6 +23,7 @@ const (
 	healthRetryEvery  = 500 * time.Millisecond
 	healthRetryTotal  = 30 * time.Second
 	cancelTimeout     = 10 * time.Second
+	jsonTimeout       = 60 * time.Second
 	maxPatchBytes     = 2 * 1024 * 1024
 	statusCompleted   = "completed"
 	statusFailed      = "failed"
@@ -44,9 +45,11 @@ type Options struct {
 }
 
 // Client 是 Euler API 的轻量客户端。
+// jsonClient 用于普通 JSON 请求，sseClient 用于长连接的 SSE 订阅，两者共享 cookie jar。
 type Client struct {
 	baseURL    string
-	httpClient *http.Client
+	jsonClient *http.Client
+	sseClient  *http.Client
 	profileID  string
 	modelName  string
 	runTimeout time.Duration
@@ -60,7 +63,8 @@ func NewClient(ctx context.Context, opts Options) (*Client, error) {
 	}
 	client := &Client{
 		baseURL:    strings.TrimRight(opts.BaseURL, "/"),
-		httpClient: &http.Client{Jar: jar},
+		jsonClient: &http.Client{Jar: jar, Timeout: jsonTimeout},
+		sseClient:  &http.Client{Jar: jar},
 		profileID:  opts.ProfileID,
 		modelName:  opts.ModelName,
 		runTimeout: opts.RunTimeout,
@@ -92,7 +96,7 @@ func (c *Client) waitHealthy(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		response, err := c.httpClient.Do(request)
+		response, err := c.jsonClient.Do(request)
 		if err == nil {
 			_ = response.Body.Close()
 			if response.StatusCode == http.StatusOK {
@@ -116,7 +120,7 @@ func (c *Client) bootstrap(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	response, err := c.httpClient.Do(request)
+	response, err := c.jsonClient.Do(request)
 	if err != nil {
 		return fmt.Errorf("获取本机 cookie: %w", err)
 	}
@@ -168,7 +172,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	response, err := c.httpClient.Do(request)
+	response, err := c.jsonClient.Do(request)
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
@@ -188,8 +192,10 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 }
 
 // RunTask 执行单题并返回一条 prediction。
-func (c *Client) RunTask(ctx context.Context, t task.Task, repo *workspace.Repo) report.Prediction {
-	pred := report.Prediction{
+func (c *Client) RunTask(
+	ctx context.Context, t task.Task, repo *workspace.Repo,
+) (pred report.Prediction) {
+	pred = report.Prediction{
 		InstanceID:      t.ID,
 		ModelNameOrPath: c.modelName,
 		Meta: report.Meta{
@@ -242,12 +248,21 @@ func (c *Client) RunTask(ctx context.Context, t task.Task, repo *workspace.Repo)
 	}
 	patch, patchErr := repo.ExtractPatch()
 	if patchErr != nil {
-		pred.Meta.Status = statusError
-		pred.Meta.Error = patchErr.Error()
+		if pred.Meta.Status == statusCompleted {
+			pred.Meta.Status = statusError
+			pred.Meta.Error = patchErr.Error()
+		} else if pred.Meta.Error != "" {
+			pred.Meta.Error += "；补丁提取失败: " + patchErr.Error()
+		} else {
+			pred.Meta.Error = "补丁提取失败: " + patchErr.Error()
+		}
 		return pred
 	}
 	if len(patch) > maxPatchBytes {
-		pred.Meta.Status = statusPatchTooBig
+		if pred.Meta.Status == statusCompleted {
+			pred.Meta.Status = statusPatchTooBig
+			pred.Meta.Error = "补丁超过 2 MiB 上限"
+		}
 		return pred
 	}
 	pred.ModelPatch = patch
@@ -256,9 +271,6 @@ func (c *Client) RunTask(ctx context.Context, t task.Task, repo *workspace.Repo)
 	pred.Meta.DiffAdded = added
 	pred.Meta.DiffDeleted = deleted
 	pred.Meta.TouchedTestFiles = touched
-	if strings.TrimSpace(patch) == "" && pred.Meta.Status == statusCompleted {
-		pred.Meta.Status = statusCompleted
-	}
 	return pred
 }
 
@@ -279,7 +291,13 @@ type runSnapshot struct {
 		Status string `json:"status"`
 	} `json:"run"`
 	ToolCalls []json.RawMessage `json:"tool_calls"`
-	Approvals []json.RawMessage `json:"approvals"`
+	Approvals []approvalState   `json:"approvals"`
+}
+
+// approvalState 是快照中单条审批的最小描述。
+type approvalState struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
 }
 
 // DiffStats 统计补丁的文件数与增删行数。
