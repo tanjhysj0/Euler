@@ -182,12 +182,34 @@ def test_validate_workdir_normalizes_container_path():
     assert validate_workdir("/app/") == "/app"
 
 
-def test_seed_workspace_quotes_workdir(tmp_path):
+def test_seed_workspace_clears_copies_and_chmods_quoted_workdir(tmp_path):
     environment = FakeEnvironment()
 
     asyncio.run(make_agent(tmp_path)._seed_workspace(environment, "/app dir"))
 
-    assert all("'/app dir'" in command for command in environment.commands)
+    assert environment.commands == [
+        "rm -rf '/app dir'/* '/app dir'/.[!.]* 2>/dev/null || true",
+        "cp -a /opt/baseline/. '/app dir'/",
+        "chmod -R a+rwX '/app dir'",
+    ]
+
+
+def test_seed_workspace_propagates_chmod_failure(tmp_path, monkeypatch):
+    environment = FakeEnvironment()
+    original_exec = environment.exec
+
+    async def fail_chmod(command):
+        if command.startswith("chmod "):
+            environment.commands.append(command)
+            return SimpleNamespace(
+                stdout="", stderr="chmod: permission denied", return_code=1
+            )
+        return await original_exec(command)
+
+    monkeypatch.setattr(environment, "exec", fail_chmod)
+
+    with pytest.raises(RuntimeError, match="permission denied"):
+        asyncio.run(make_agent(tmp_path)._seed_workspace(environment, "/app"))
 
 
 def test_seed_workspace_rejects_dangerous_workdir(tmp_path):
@@ -226,14 +248,16 @@ def test_validate_host_workspace_rejects_unsafe_paths():
         "/",
         "relative/path",
         "/Users/jason/go/src/Euler",
+        "/tmp//",
         "/tmp/euler-harbor",
+        "/tmp/euler-harbor/other",
         "/tmp/euler-harbor/../etc",
     ):
         with pytest.raises(ValueError):
             validate_host_workspace(path)
 
 
-def test_validate_host_workspace_accepts_tmp_subdir():
+def test_validate_host_workspace_accepts_fixed_path_with_trailing_slash():
     assert (
         validate_host_workspace("/tmp/euler-harbor/workspace/")
         == "/tmp/euler-harbor/workspace"

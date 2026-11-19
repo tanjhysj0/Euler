@@ -55,7 +55,7 @@ for kind in oracle euler nop; do
   echo "  路径: $reward_file"
   echo "  mtime: $(date -r "$reward_file" '+%Y-%m-%d %H:%M:%S')"
   if [ "$reward" != "$expected" ]; then
-    echo "[$job] reward 断言失败：期望 $expected，实际 $reward" >&2
+    echo "[$job] reward 断言失败：期望 ${expected}，实际 $reward" >&2
     gate_status=1
   fi
 done

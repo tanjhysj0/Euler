@@ -97,11 +97,11 @@ environment:
 
 `EulerAgent` 继承 `harbor.agents.base.BaseAgent`，实现 `setup` 与 `run`：
 
-1. `setup`：直接构造客户端，先 `GET /health` 探测 Euler（`/health` 不依赖 cookie），最多 30 次、每次间隔 1 秒，最后显式关闭客户端；不依赖 `async with` 的 bootstrap。
+1. `setup`：显式创建 `EulerClient`，先 `GET /health` 探测 Euler（`/health` 不依赖 cookie），最多 30 次、每次间隔 1 秒；无论健康检查成功或失败，都在 `finally` 中执行 `await client.aclose()`。不使用会触发 bootstrap 的 `async with`。
 2. `run`：
    1. 先校验宿主机工作区，非法路径直接失败且不创建会话。
    2. `environment.exec(command="pwd")` 获取容器工作目录。
-   3. 清空该目录，并从 `/opt/baseline` 重新播种。
+   3. 清空该目录，并从 `/opt/baseline` 重新播种；复制成功后，对已校验并 shell 转义的 workdir 执行 `chmod -R a+rwX`，确保容器内 root 复制的文件和目录可由宿主机非 root Euler 进程读写。复制或权限调整失败均抛出带 stderr 的 `RuntimeError`，且不修改 `/opt/baseline`。
    4. 在宿主机对 `/tmp/euler-harbor/workspace` 执行 `git init` 与 baseline commit。
    5. 通过 `EulerClient` 创建/复用模型配置、创建会话（`path` 为宿主机工作区）、启动 Run。
    6. 消费 SSE；`approval.requested` 一律批准；断线用 `after=<seq>` 重连，连续失败 3 次后放弃，收到任意事件即重置连续失败计数。
@@ -129,9 +129,10 @@ environment:
 ## 7. 安全与限制
 
 - Harbor 并发固定为 1，因为宿主机工作区路径固定。
-- `EULER_HARBOR_WORKSPACE` 必须是非空绝对路径、以 `/tmp/euler-harbor/` 开头，而且必须与 job YAML 的 mount `source` 完全一致；适配器在 `run()` 入口校验，空值、`/`、相对路径、仓库路径与 `..` 穿越都会在创建会话前直接失败。
+- `EULER_HARBOR_WORKSPACE` 必须是非空绝对路径，经 `posixpath.normpath` 规范化后等于固定工作区 `/tmp/euler-harbor/workspace`，而且必须与 job YAML 的 mount `source` 完全一致；适配器在 `run()` 入口校验，空值、`/`、相对路径、仓库路径与其他非固定路径都会在创建会话前直接失败。
 - `/tests` 在 Agent 结束后才上传，Euler 无法提前读取。
 - Phase 1 使用 shared verifier；Euler 无法访问 `/tests`，但不能篡改 verifier 镜像。
+- `cancel-async-tasks` 的官方 `tests/test.sh` 无条件执行 `apt-get update` 和 `apt-get install -y curl`，从 `astral.sh` 在线安装 uv，再通过 `uvx` 获取 Python 3.13、pytest 与 pytest-json-ctrf；因此编码任务 Oracle 和 Euler 的 verifier 都必须联网。官方脚本保持原样，当前方案不支持离线运行。
 - Euler shell 仍在宿主机执行，无沙箱；评测机应使用独立用户或虚拟机。
 - 只支持文件型任务；依赖系统服务、GPU 或交互式网络的任务不纳入。
 - 不提交任何真实 API Key；模型 Key 通过 Euler 服务进程环境变量提供。

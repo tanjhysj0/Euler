@@ -18,7 +18,6 @@ from agents.euler_client import TERMINAL_EVENTS, EulerClient
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 DEFAULT_WORKSPACE = "/tmp/euler-harbor/workspace"
-HOST_WORKSPACE_PREFIX = "/tmp/euler-harbor/"
 BASELINE_DIR = "/opt/baseline"
 APPROVAL_REASON = "euler-harbor"
 MAX_RECONNECTS = 3
@@ -50,12 +49,10 @@ def validate_host_workspace(path: str) -> str:
     """校验宿主机共享工作区，避免 git、会话与删除操作落到任意目录。"""
     if not path or not path.startswith("/"):
         raise ValueError(f"invalid host workspace: {path!r}")
-    if ".." in path.split("/"):
-        raise ValueError(f"invalid host workspace: {path!r}")
     normalized = posixpath.normpath(path)
-    if not normalized.startswith(HOST_WORKSPACE_PREFIX):
+    if normalized != DEFAULT_WORKSPACE:
         raise ValueError(
-            f"host workspace must be under {HOST_WORKSPACE_PREFIX}: {normalized!r}"
+            f"host workspace must be {DEFAULT_WORKSPACE}: {normalized!r}"
         )
     return normalized
 
@@ -185,6 +182,9 @@ class EulerAgent(BaseAgent):
         result = await environment.exec(command=f"cp -a {BASELINE_DIR}/. {quoted}/")
         if result.return_code != 0:
             raise RuntimeError(f"seed workspace failed: {result.stderr}")
+        result = await environment.exec(command=f"chmod -R a+rwX {quoted}")
+        if result.return_code != 0:
+            raise RuntimeError(f"chmod workspace failed: {result.stderr}")
 
     async def _consume(self, client: EulerClient, run_id: str) -> None:
         last_seq = 0

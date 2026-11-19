@@ -15,9 +15,10 @@
 - 已在宿主机验证：`harbor 0.26.0`、`Python 3.14.6`、`Docker 29.6.1`、`uv` 可用。
 - 本地目录使用 `harbor_eval/`，禁止命名为 `harbor/`，避免遮蔽已安装的 `harbor` Python 包。
 - 固定工作区：`/tmp/euler-harbor/workspace`；Harbor 并发固定为 `1`。
-- `EULER_HARBOR_WORKSPACE` 必须与 job YAML 的 mount `source` 完全一致；适配器只接受 `/tmp/euler-harbor/` 下的路径。
+- `EULER_HARBOR_WORKSPACE` 必须与 job YAML 的 mount `source` 完全一致；适配器只接受经 `posixpath.normpath` 规范化后等于固定工作区 `/tmp/euler-harbor/workspace` 的路径。
 - 只下载 2 个任务：`hello-world/hello-world` 与一个 Terminal-Bench 编码任务。
 - 不修改官方 `tests/`；不提交任何真实 API Key。
+- 编码任务 Oracle 和 Euler 的官方 verifier 都必须联网获取依赖；保持官方脚本不变时，不支持离线运行（详见 Task 6 Step 6）。
 - Phase 1 使用 `[verifier] environment_mode = "shared"`。
 - 两个任务镜像合计不得超过 4GB；超过则只保留 hello-world。
 - 本计划不改 Euler 的 Go 代码；已有 Go 测试与 lint 必须保持通过。
@@ -682,8 +683,12 @@ class EulerAgent(BaseAgent):
         return "0.1.0"
 
     async def setup(self, environment: BaseEnvironment) -> None:
-        async with EulerClient(self.base_url) as client:
+        # 不用 async with：bootstrap 需要 cookie，而健康重试必须在 bootstrap 之前进行
+        client = EulerClient(self.base_url)
+        try:
             await self._wait_health(client)
+        finally:
+            await client.aclose()
 
     async def run(
         self,
@@ -745,6 +750,10 @@ class EulerAgent(BaseAgent):
         result = await environment.exec(command=f"cp -a {BASELINE_DIR}/. {workdir}/")
         if result.return_code != 0:
             raise RuntimeError(f"seed workspace failed: {result.stderr}")
+        # 容器内 root 播种后，放开权限供宿主机非 root Euler 进程读写
+        result = await environment.exec(command=f"chmod -R a+rwX {workdir}")
+        if result.return_code != 0:
+            raise RuntimeError(f"chmod workspace failed: {result.stderr}")
 
     async def _consume(self, client: EulerClient, run_id: str) -> None:
         last_seq = 0
@@ -1022,7 +1031,7 @@ harbor run -c harbor_eval/jobs/coding-oracle.yaml -y
 find harbor_eval/results/euler-harbor-coding-oracle -name 'reward*' -print -exec cat {} \;
 ```
 
-Expected: reward `1`。若失败，检查是否缺 `solution`、是否依赖网络或 GPU；不满足条件就换候选任务。
+Expected: reward `1`。官方 `tests/test.sh` 无条件执行 `apt-get update` 和 `apt-get install -y curl`，通过 `https://astral.sh/uv/0.9.5/install.sh` 在线安装 uv，再用 `uvx` 获取 Python 3.13、`pytest==8.4.1` 与 `pytest-json-ctrf==0.3.5`。因此编码任务的官方 verifier（Oracle 与 Euler 均会执行）要求联网；在不修改官方脚本的前提下，不支持也不宣称支持离线运行。若失败，先检查外网与上述依赖是否可获取，再检查 `solution` 或 GPU 等其他任务依赖。
 
 - [ ] **Step 7: 检查磁盘**
 
@@ -1135,4 +1144,4 @@ git commit -m "test(harbor): 增加编码任务运行脚本"
 - 规格覆盖：任务来源（Task 1/6）、bind mount（Task 2/6）、外部 Agent（Task 3/4）、Oracle（Task 2/6）、负向验证（Task 5）、磁盘门禁（Task 6）、最终门禁（Task 7）均有对应任务。
 - 无占位符：所有代码、命令、配置均为可直接执行内容。
 - 类型一致：`EulerClient` 的方法签名在 Task 3 定义，Task 4 按同一签名调用；`build_instruction` 参数顺序一致。
-- 已知风险：官方任务若依赖 `/app` 以外的状态或需要网络/GPU，Task 6 会通过 Oracle 失败暴露并触发候选任务替换。
+- 已知风险：编码任务的官方 verifier 必须联网，网络或依赖源不可用会使 Oracle/Euler 判分失败；这不构成离线支持。官方任务若依赖 `/app` 以外的状态或 GPU，Task 6 会通过 Oracle 失败暴露并触发候选任务替换。
