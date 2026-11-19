@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,6 +198,18 @@ func TestRunResolvesGoldAndIgnoresTampering(t *testing.T) {
 	}
 }
 
+// runFilteredTests 以 -run 过滤执行一次测试命令，返回解析后的结果。
+// F2P 与 P2P 必须分开运行：race 报告可能让整个测试二进制提前退出，
+// 同包后续测试因而不会产生事件，混合运行会把 P2P 误判为未通过。
+func runFilteredTests(dir, command string, specs []string) (testOutcomes, error) {
+	pattern := "^(" + strings.Join(specs, "|") + ")$"
+	output, err := runTestCommand(dir, command+" -run "+pattern, 2*time.Minute)
+	if err != nil {
+		return testOutcomes{}, err
+	}
+	return parseTestOutput(bytes.NewReader(output)), nil
+}
+
 // TestRepoBaselineSemantics 用真实题库守住出题质量：每个 F2P 必须在
 // buggy 基线上失败，每个 P2P 必须通过，否则题目无效。
 func TestRepoBaselineSemantics(t *testing.T) {
@@ -222,18 +235,21 @@ func TestRepoBaselineSemantics(t *testing.T) {
 		if err = repo.ApplyFile(item.TestPatch()); err != nil {
 			t.Fatalf("%s: 应用隐藏测试: %v", item.ID, err)
 		}
-		output, err := runTestCommand(repo.Dir, item.TestCommand, 2*time.Minute)
+		f2pOutcomes, err := runFilteredTests(repo.Dir, item.TestCommand, item.FailToPass)
 		if err != nil {
-			t.Fatalf("%s: 运行测试: %v", item.ID, err)
+			t.Fatalf("%s: 运行 F2P 测试: %v", item.ID, err)
 		}
-		outcomes := parseTestOutput(bytes.NewReader(output))
 		for _, spec := range item.FailToPass {
-			if status, ok := outcomes.lookup(spec); ok && status == "pass" {
+			if status, ok := f2pOutcomes.lookup(spec); ok && status == "pass" {
 				t.Errorf("%s: F2P %s 在 buggy 基线已通过，题目无效", item.ID, spec)
 			}
 		}
+		p2pOutcomes, err := runFilteredTests(repo.Dir, item.TestCommand, item.PassToPass)
+		if err != nil {
+			t.Fatalf("%s: 运行 P2P 测试: %v", item.ID, err)
+		}
 		for _, spec := range item.PassToPass {
-			if status, ok := outcomes.lookup(spec); !ok || status != "pass" {
+			if status, ok := p2pOutcomes.lookup(spec); !ok || status != "pass" {
 				t.Errorf("%s: P2P %s 在 buggy 基线未通过（status=%q, ok=%v）",
 					item.ID, spec, status, ok)
 			}
