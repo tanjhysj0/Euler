@@ -16,3 +16,9 @@
 
 # 日志
 *.log
+
+# Harbor 评测产物
+/harbor_eval/tasks/_downloads/
+/harbor_eval/results/
+/harbor_eval/.pytest_cache/
+/harbor_eval/**/__pycache__/
