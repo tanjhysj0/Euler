@@ -58,6 +58,10 @@ class EulerClient:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        """关闭底层 HTTP 连接池，供不使用 async with 的调用方显式释放。"""
         await self._client.aclose()
 
     async def bootstrap(self) -> None:

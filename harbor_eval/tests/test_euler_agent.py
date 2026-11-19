@@ -3,7 +3,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from agents.euler_agent import APPROVAL_REASON, EulerAgent, validate_workdir
+from agents.euler_agent import (
+    APPROVAL_REASON,
+    EulerAgent,
+    validate_host_workspace,
+    validate_workdir,
+)
 from agents.euler_client import Event
 
 
@@ -63,6 +68,28 @@ class FakeEnvironment:
     async def exec(self, command):
         self.commands.append(command)
         return SimpleNamespace(stdout="/app\n", stderr="", return_code=0)
+
+
+class FakeHealthClient:
+    """前 N 次健康检查抛错的假客户端。"""
+
+    def __init__(self, failures: int):
+        self.remaining = failures
+        self.calls = 0
+
+    async def health(self):
+        self.calls += 1
+        if self.remaining > 0:
+            self.remaining -= 1
+            raise RuntimeError("euler not ready")
+
+
+class CancelledStreamClient(FakeRunClient):
+    """事件流直接抛 CancelledError，模拟 Harbor 终止 trial。"""
+
+    async def events(self, run_id, after=0):
+        raise asyncio.CancelledError()
+        yield  # pragma: no cover
 
 
 def make_agent(tmp_path) -> EulerAgent:
@@ -170,3 +197,59 @@ def test_seed_workspace_rejects_dangerous_workdir(tmp_path):
         asyncio.run(make_agent(tmp_path)._seed_workspace(environment, "/opt"))
 
     assert environment.commands == []
+
+
+def test_wait_health_retries_until_success(tmp_path, monkeypatch):
+    monkeypatch.setattr("agents.euler_agent.HEALTH_RETRY_DELAY_SECONDS", 0.0)
+    client = FakeHealthClient(failures=2)
+
+    asyncio.run(make_agent(tmp_path)._wait_health(client))
+
+    assert client.calls == 3
+
+
+def test_run_cancels_run_and_reraises_on_cancel(tmp_path, monkeypatch):
+    client = CancelledStreamClient([])
+    monkeypatch.setattr("agents.euler_agent.EulerClient", lambda base_url: client)
+    monkeypatch.setattr("agents.euler_agent.git_baseline", lambda workspace: None)
+
+    context = SimpleNamespace(metadata=None)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(make_agent(tmp_path).run("fix", FakeEnvironment(), context))
+
+    assert client.cancelled == ["run-1"]
+
+
+def test_validate_host_workspace_rejects_unsafe_paths():
+    for path in (
+        "",
+        "/",
+        "relative/path",
+        "/Users/jason/go/src/Euler",
+        "/tmp/euler-harbor",
+        "/tmp/euler-harbor/../etc",
+    ):
+        with pytest.raises(ValueError):
+            validate_host_workspace(path)
+
+
+def test_validate_host_workspace_accepts_tmp_subdir():
+    assert (
+        validate_host_workspace("/tmp/euler-harbor/workspace/")
+        == "/tmp/euler-harbor/workspace"
+    )
+
+
+def test_run_rejects_host_workspace_before_session(tmp_path, monkeypatch):
+    agent = make_agent(tmp_path)
+    agent.workspace = "/Users/jason/go/src/Euler"
+
+    def fail(base_url):
+        raise AssertionError("非法工作区不应创建 client")
+
+    monkeypatch.setattr("agents.euler_agent.EulerClient", fail)
+
+    with pytest.raises(ValueError):
+        asyncio.run(
+            agent.run("fix", FakeEnvironment(), SimpleNamespace(metadata=None))
+        )

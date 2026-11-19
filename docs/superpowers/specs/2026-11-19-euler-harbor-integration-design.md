@@ -1,7 +1,7 @@
 # Euler Harbor 接入设计
 
 - 日期：2026-11-19
-- 状态：待实施
+- 状态：已实施
 - 范围：把 Harbor 作为第二套编码能力评测执行层，与 euleval 并存
 
 ## 1. 目标
@@ -36,6 +36,7 @@ harbor_eval/
 │   └── euler_agent.py       # Harbor BaseAgent 适配器
 ├── tests/
 │   ├── test_euler_client.py
+│   ├── test_euler_agent.py
 │   └── test_helpers.py
 ├── jobs/
 │   ├── hello-oracle.yaml
@@ -96,15 +97,16 @@ environment:
 
 `EulerAgent` 继承 `harbor.agents.base.BaseAgent`，实现 `setup` 与 `run`：
 
-1. `setup`：`GET /health` 探测 Euler，最多重试 30 秒。
+1. `setup`：直接构造客户端，先 `GET /health` 探测 Euler（`/health` 不依赖 cookie），最多 30 次、每次间隔 1 秒，最后显式关闭客户端；不依赖 `async with` 的 bootstrap。
 2. `run`：
-   1. `environment.exec(command="pwd")` 获取容器工作目录。
-   2. 清空该目录，并从 `/opt/baseline` 重新播种。
-   3. 在宿主机对 `/tmp/euler-harbor/workspace` 执行 `git init` 与 baseline commit。
-   4. 通过 `EulerClient` 创建/复用模型配置、创建会话（`path` 为宿主机工作区）、启动 Run。
-   5. 消费 SSE；`approval.requested` 一律批准；断线用 `after=<seq>` 重连，最多 3 次。
-   6. 超时取消 Run；终态非 `succeeded` 时抛错，让 Harbor 记为失败。
-   7. 把 `run_id`、工具调用数、审批数写入 `AgentContext.metadata`。
+   1. 先校验宿主机工作区，非法路径直接失败且不创建会话。
+   2. `environment.exec(command="pwd")` 获取容器工作目录。
+   3. 清空该目录，并从 `/opt/baseline` 重新播种。
+   4. 在宿主机对 `/tmp/euler-harbor/workspace` 执行 `git init` 与 baseline commit。
+   5. 通过 `EulerClient` 创建/复用模型配置、创建会话（`path` 为宿主机工作区）、启动 Run。
+   6. 消费 SSE；`approval.requested` 一律批准；断线用 `after=<seq>` 重连，连续失败 3 次后放弃，收到任意事件即重置连续失败计数。
+   7. 任何非终态退出（含超时与 Harbor 外部取消）都会先取消 Run，并用 `asyncio.shield` 保证取消请求不被正在传播的取消信号打断；默认超时 `EULER_AGENT_TIMEOUT=840` 秒，低于编码任务自身的 900 秒，hello-world 的 120 秒由 Harbor 先终止 trial，依赖该取消路径兜底。终态非 `succeeded` 时抛错，让 Harbor 记为失败。
+   8. 把 `run_id`、工具调用数、审批数写入 `AgentContext.metadata`。
 
 指令由适配器在官方 `instruction` 前追加一行：
 
@@ -127,6 +129,7 @@ environment:
 ## 7. 安全与限制
 
 - Harbor 并发固定为 1，因为宿主机工作区路径固定。
+- `EULER_HARBOR_WORKSPACE` 必须是非空绝对路径、以 `/tmp/euler-harbor/` 开头，而且必须与 job YAML 的 mount `source` 完全一致；适配器在 `run()` 入口校验，空值、`/`、相对路径、仓库路径与 `..` 穿越都会在创建会话前直接失败。
 - `/tests` 在 Agent 结束后才上传，Euler 无法提前读取。
 - Phase 1 使用 shared verifier；Euler 无法访问 `/tests`，但不能篡改 verifier 镜像。
 - Euler shell 仍在宿主机执行，无沙箱；评测机应使用独立用户或虚拟机。
@@ -135,13 +138,12 @@ environment:
 
 ## 8. 验收标准
 
-1. `harbor run -c harbor_eval/jobs/hello-oracle.yaml` 得到 reward 1。
-2. `harbor run -c harbor_eval/jobs/hello-euler.yaml` 得到 reward 1。
-3. `harbor run -c harbor_eval/jobs/hello-nop.yaml` 得到 reward 0。
-4. 编码任务 Oracle 得到 reward 1；EulerAgent 能产出 reward，且失败时不会误判为 1。
-5. `uv run --with pytest --with httpx --with 'harbor==0.26.0' pytest harbor_eval/tests -q` 全绿。
-6. 任务镜像合计 ≤ 4GB；`harbor_eval/results` 与 `/tmp/euler-harbor` 可清理。
-7. 现有 Go 单元测试与 `golangci-lint` 不受影响。
+1. `./harbor_eval/scripts/run-smoke.sh`：Oracle reward 1、Euler reward 1、nop reward 0，脚本对三者显式断言，缺失 reward 或值不符时非零退出。
+2. `./harbor_eval/scripts/run-coding.sh`：编码任务 Oracle 得到 reward 1；EulerAgent 能产出 reward，且失败时不会误判为 1。
+3. 两个脚本每次都用唯一 `run_id` 写入独立结果目录，避免 `harbor run -c` 复用旧 trial 打印过期 reward。
+4. `uv run --with pytest --with httpx --with 'harbor==0.26.0' pytest harbor_eval/tests -q` 全绿。
+5. 任务镜像合计 ≤ 4GB；`harbor_eval/results` 与 `/tmp/euler-harbor` 可清理。
+6. 现有 Go 单元测试与 `golangci-lint` 不受影响。
 
 ## 9. 非目标
 

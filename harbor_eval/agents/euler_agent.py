@@ -18,10 +18,13 @@ from agents.euler_client import TERMINAL_EVENTS, EulerClient
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 DEFAULT_WORKSPACE = "/tmp/euler-harbor/workspace"
+HOST_WORKSPACE_PREFIX = "/tmp/euler-harbor/"
 BASELINE_DIR = "/opt/baseline"
 APPROVAL_REASON = "euler-harbor"
 MAX_RECONNECTS = 3
 RECONNECT_DELAY_SECONDS = 1.0
+HEALTH_RETRIES = 30
+HEALTH_RETRY_DELAY_SECONDS = 1.0
 DANGEROUS_WORKDIRS = frozenset({"/", "/opt", BASELINE_DIR})
 
 
@@ -40,6 +43,20 @@ def validate_workdir(workdir: str) -> str:
     normalized = posixpath.normpath(workdir)
     if normalized in DANGEROUS_WORKDIRS or not normalized.strip("/"):
         raise ValueError(f"refusing dangerous workdir: {normalized!r}")
+    return normalized
+
+
+def validate_host_workspace(path: str) -> str:
+    """校验宿主机共享工作区，避免 git、会话与删除操作落到任意目录。"""
+    if not path or not path.startswith("/"):
+        raise ValueError(f"invalid host workspace: {path!r}")
+    if ".." in path.split("/"):
+        raise ValueError(f"invalid host workspace: {path!r}")
+    normalized = posixpath.normpath(path)
+    if not normalized.startswith(HOST_WORKSPACE_PREFIX):
+        raise ValueError(
+            f"host workspace must be under {HOST_WORKSPACE_PREFIX}: {normalized!r}"
+        )
     return normalized
 
 
@@ -76,14 +93,18 @@ class EulerAgent(BaseAgent):
         self.model_base_url = os.environ.get("EULER_MODEL_BASE_URL") or None
         self.model = os.environ.get("EULER_MODEL") or None
         self.secret_ref = os.environ.get("EULER_MODEL_KEY_ENV", "OPENAI_API_KEY")
-        self.agent_timeout = float(os.environ.get("EULER_AGENT_TIMEOUT", "900"))
+        self.agent_timeout = float(os.environ.get("EULER_AGENT_TIMEOUT", "840"))
 
     def version(self) -> str:
         return "0.1.0"
 
     async def setup(self, environment: BaseEnvironment) -> None:
-        async with EulerClient(self.base_url) as client:
+        # 不用 async with：bootstrap 需要 cookie，而健康重试必须在 bootstrap 之前进行
+        client = EulerClient(self.base_url)
+        try:
             await self._wait_health(client)
+        finally:
+            await client.aclose()
 
     async def run(
         self,
@@ -91,10 +112,12 @@ class EulerAgent(BaseAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
+        # 必须最先校验宿主机工作区，非法路径直接失败且不创建会话
+        workspace = validate_host_workspace(self.workspace)
         workdir = await self._workdir(environment)
         await self._seed_workspace(environment, workdir)
-        git_baseline(self.workspace)
-        full_instruction = build_instruction(instruction, self.workspace, workdir)
+        git_baseline(workspace)
+        full_instruction = build_instruction(instruction, workspace, workdir)
 
         async with EulerClient(self.base_url) as client:
             profile_id = await client.ensure_profile(
@@ -103,27 +126,30 @@ class EulerAgent(BaseAgent):
                 self.model,
                 self.secret_ref,
             )
-            session_id = await client.create_session(profile_id, self.workspace)
+            session_id = await client.create_session(profile_id, workspace)
             run_id = await client.start_run(session_id, full_instruction)
+            run_finished = False
             try:
-                await self._consume(client, run_id)
-                snapshot = await client.snapshot(run_id)
-            except TimeoutError:
-                await self._cancel(client, run_id)
-                raise RuntimeError("euler run timed out") from None
-            except Exception:
-                # 任何非正常退出都先取消 run，避免宿主机留下孤儿 run
-                await self._cancel(client, run_id)
-                raise
-            context.metadata = {
-                "run_id": run_id,
-                "session_id": session_id,
-                "tool_calls": len(snapshot.get("tool_calls") or []),
-                "approvals": len(snapshot.get("approvals") or []),
-            }
-            status = (snapshot.get("run") or {}).get("status")
-            if status != "succeeded":
-                raise RuntimeError(f"euler run ended with status={status}")
+                try:
+                    await self._consume(client, run_id)
+                    snapshot = await client.snapshot(run_id)
+                except TimeoutError:
+                    raise RuntimeError("euler run timed out") from None
+                context.metadata = {
+                    "run_id": run_id,
+                    "session_id": session_id,
+                    "tool_calls": len(snapshot.get("tool_calls") or []),
+                    "approvals": len(snapshot.get("approvals") or []),
+                }
+                status = (snapshot.get("run") or {}).get("status")
+                if status != "succeeded":
+                    raise RuntimeError(f"euler run ended with status={status}")
+                run_finished = True
+            finally:
+                # 任何非终态退出（含外部取消/超时）都取消 run，避免孤儿 run 污染工作区；
+                # shield 保证取消请求不会被正在传播的取消信号打断
+                if not run_finished:
+                    await asyncio.shield(self._cancel(client, run_id))
 
     async def _cancel(self, client: EulerClient, run_id: str) -> None:
         """尽力取消 run；取消失败时保留原始异常。"""
@@ -133,12 +159,12 @@ class EulerAgent(BaseAgent):
             pass
 
     async def _wait_health(self, client: EulerClient) -> None:
-        for _ in range(30):
+        for _ in range(HEALTH_RETRIES):
             try:
                 await client.health()
                 return
             except Exception:
-                await asyncio.sleep(1)
+                await asyncio.sleep(HEALTH_RETRY_DELAY_SECONDS)
         raise RuntimeError("euler health check failed")
 
     async def _workdir(self, environment: BaseEnvironment) -> str:

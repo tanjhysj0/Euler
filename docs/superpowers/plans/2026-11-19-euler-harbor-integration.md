@@ -15,6 +15,7 @@
 - 已在宿主机验证：`harbor 0.26.0`、`Python 3.14.6`、`Docker 29.6.1`、`uv` 可用。
 - 本地目录使用 `harbor_eval/`，禁止命名为 `harbor/`，避免遮蔽已安装的 `harbor` Python 包。
 - 固定工作区：`/tmp/euler-harbor/workspace`；Harbor 并发固定为 `1`。
+- `EULER_HARBOR_WORKSPACE` 必须与 job YAML 的 mount `source` 完全一致；适配器只接受 `/tmp/euler-harbor/` 下的路径。
 - 只下载 2 个任务：`hello-world/hello-world` 与一个 Terminal-Bench 编码任务。
 - 不修改官方 `tests/`；不提交任何真实 API Key。
 - Phase 1 使用 `[verifier] environment_mode = "shared"`。
@@ -31,6 +32,7 @@
 | `harbor_eval/agents/euler_client.py` | 纯 HTTP 客户端，不依赖 Harbor，可单测 |
 | `harbor_eval/agents/euler_agent.py` | Harbor `BaseAgent` 适配器 |
 | `harbor_eval/tests/test_euler_client.py` | 客户端与 SSE 解析单测 |
+| `harbor_eval/tests/test_euler_agent.py` | 适配器重连、取消与路径护栏单测 |
 | `harbor_eval/tests/test_helpers.py` | 指令映射等纯函数单测 |
 | `harbor_eval/jobs/*.yaml` | Oracle / Euler / nop 的 job 配置 |
 | `harbor_eval/tasks/hello-world/` | 适配后的冒烟任务 |
@@ -674,7 +676,7 @@ class EulerAgent(BaseAgent):
         self.model_base_url = os.environ.get("EULER_MODEL_BASE_URL") or None
         self.model = os.environ.get("EULER_MODEL") or None
         self.secret_ref = os.environ.get("EULER_MODEL_KEY_ENV", "OPENAI_API_KEY")
-        self.agent_timeout = float(os.environ.get("EULER_AGENT_TIMEOUT", "900"))
+        self.agent_timeout = float(os.environ.get("EULER_AGENT_TIMEOUT", "840"))
 
     def version(self) -> str:
         return "0.1.0"
@@ -781,7 +783,7 @@ PYTHONPATH=harbor_eval uv run --with pytest --with httpx --with 'harbor==0.26.0'
   pytest harbor_eval/tests -q
 ```
 
-Expected: 8 passed。
+Expected: 22 passed。
 
 - [ ] **Step 5: 提交**
 
@@ -1090,7 +1092,7 @@ PYTHONPATH=harbor_eval uv run --with pytest --with httpx --with 'harbor==0.26.0'
   pytest harbor_eval/tests -q
 ```
 
-Expected: 8 passed。
+Expected: 22 passed。
 
 - [ ] **Step 4: Harbor 冒烟门禁**
 

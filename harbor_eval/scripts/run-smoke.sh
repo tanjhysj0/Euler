@@ -31,16 +31,37 @@ harbor run -c harbor_eval/jobs/hello-nop.yaml -y \
 
 # 只汇总本次 run_id 的结果，并标注路径与 mtime 以确认新鲜度
 echo "===== 本次运行 $run_id 的 reward ====="
+gate_status=0
 for kind in oracle euler nop; do
+  case "$kind" in
+    nop) expected=0 ;;
+    *) expected=1 ;;
+  esac
   job="hello-$kind-$run_id"
   job_dir="$results_dir/$job"
   if [ ! -d "$job_dir" ]; then
     echo "[$job] 未找到结果目录: $job_dir" >&2
+    gate_status=1
     continue
   fi
-  while IFS= read -r reward_file; do
-    echo "[$job] reward=$(cat "$reward_file")"
-    echo "  路径: $reward_file"
-    echo "  mtime: $(date -r "$reward_file" '+%Y-%m-%d %H:%M:%S')"
-  done < <(find "$job_dir" -name 'reward.txt' -print)
+  reward_file=$(find "$job_dir" -name 'reward.txt' -print -quit)
+  if [ -z "$reward_file" ]; then
+    echo "[$job] 未找到 reward.txt: $job_dir" >&2
+    gate_status=1
+    continue
+  fi
+  reward=$(tr -d '[:space:]' < "$reward_file")
+  echo "[$job] reward=$reward"
+  echo "  路径: $reward_file"
+  echo "  mtime: $(date -r "$reward_file" '+%Y-%m-%d %H:%M:%S')"
+  if [ "$reward" != "$expected" ]; then
+    echo "[$job] reward 断言失败：期望 $expected，实际 $reward" >&2
+    gate_status=1
+  fi
 done
+
+if [ "$gate_status" -ne 0 ]; then
+  echo "冒烟门禁失败：期望 Oracle=1 Euler=1 nop=0" >&2
+  exit 1
+fi
+echo "冒烟门禁通过：Oracle=1 Euler=1 nop=0"
