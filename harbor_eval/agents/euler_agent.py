@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import posixpath
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -20,6 +22,7 @@ BASELINE_DIR = "/opt/baseline"
 APPROVAL_REASON = "euler-harbor"
 MAX_RECONNECTS = 3
 RECONNECT_DELAY_SECONDS = 1.0
+DANGEROUS_WORKDIRS = frozenset({"/", "/opt", BASELINE_DIR})
 
 
 def build_instruction(instruction: str, workspace: str, workdir: str) -> str:
@@ -28,6 +31,21 @@ def build_instruction(instruction: str, workspace: str, workdir: str) -> str:
         f"你的工作区目录是 {workspace}（原任务中的 {workdir} 对应此目录）。"
     )
     return f"{prefix}\n\n{instruction}"
+
+
+def validate_workdir(workdir: str) -> str:
+    """校验容器工作目录，拒绝空值、相对路径与危险根路径。"""
+    if not workdir or not workdir.startswith("/"):
+        raise ValueError(f"invalid workdir: {workdir!r}")
+    normalized = posixpath.normpath(workdir)
+    if normalized in DANGEROUS_WORKDIRS or not normalized.strip("/"):
+        raise ValueError(f"refusing dangerous workdir: {normalized!r}")
+    return normalized
+
+
+def _reconnect_delay(attempt: int) -> float:
+    """按连续失败次数指数退避，避免短时间内耗尽重连预算。"""
+    return RECONNECT_DELAY_SECONDS * (2 ** (attempt - 1))
 
 
 def git_baseline(workspace: str) -> None:
@@ -89,10 +107,14 @@ class EulerAgent(BaseAgent):
             run_id = await client.start_run(session_id, full_instruction)
             try:
                 await self._consume(client, run_id)
+                snapshot = await client.snapshot(run_id)
             except TimeoutError:
-                await client.cancel(run_id)
+                await self._cancel(client, run_id)
                 raise RuntimeError("euler run timed out") from None
-            snapshot = await client.snapshot(run_id)
+            except Exception:
+                # 任何非正常退出都先取消 run，避免宿主机留下孤儿 run
+                await self._cancel(client, run_id)
+                raise
             context.metadata = {
                 "run_id": run_id,
                 "session_id": session_id,
@@ -102,6 +124,13 @@ class EulerAgent(BaseAgent):
             status = (snapshot.get("run") or {}).get("status")
             if status != "succeeded":
                 raise RuntimeError(f"euler run ended with status={status}")
+
+    async def _cancel(self, client: EulerClient, run_id: str) -> None:
+        """尽力取消 run；取消失败时保留原始异常。"""
+        try:
+            await client.cancel(run_id)
+        except Exception:
+            pass
 
     async def _wait_health(self, client: EulerClient) -> None:
         for _ in range(30):
@@ -121,20 +150,26 @@ class EulerAgent(BaseAgent):
     async def _seed_workspace(
         self, environment: BaseEnvironment, workdir: str
     ) -> None:
+        # 先校验再拼 shell 命令，拒不安全路径
+        safe_workdir = validate_workdir(workdir)
+        quoted = shlex.quote(safe_workdir)
         await environment.exec(
-            command=f"rm -rf {workdir}/* {workdir}/.[!.]* 2>/dev/null || true"
+            command=f"rm -rf {quoted}/* {quoted}/.[!.]* 2>/dev/null || true"
         )
-        result = await environment.exec(command=f"cp -a {BASELINE_DIR}/. {workdir}/")
+        result = await environment.exec(command=f"cp -a {BASELINE_DIR}/. {quoted}/")
         if result.return_code != 0:
             raise RuntimeError(f"seed workspace failed: {result.stderr}")
 
     async def _consume(self, client: EulerClient, run_id: str) -> None:
         last_seq = 0
-        reconnects = 0
+        failures = 0
         async with asyncio.timeout(self.agent_timeout):
             while True:
+                error: Exception | None = None
                 try:
                     async for event in client.events(run_id, after=last_seq):
+                        # 收到任意事件即重置连续失败计数
+                        failures = 0
                         last_seq = event.seq
                         if event.type == "approval.requested":
                             approval_id = str(event.payload.get("approval_id", ""))
@@ -144,14 +179,13 @@ class EulerAgent(BaseAgent):
                                 )
                         if event.type in TERMINAL_EVENTS:
                             return
-                    reconnects += 1
-                    if reconnects > MAX_RECONNECTS:
-                        raise RuntimeError(
-                            "euler event stream ended without terminal event"
-                        )
-                    await asyncio.sleep(RECONNECT_DELAY_SECONDS)
-                except (httpx.TransportError, httpx.ReadTimeout):
-                    reconnects += 1
-                    if reconnects > MAX_RECONNECTS:
-                        raise
-                    await asyncio.sleep(RECONNECT_DELAY_SECONDS)
+                except (httpx.TransportError, httpx.ReadTimeout) as exc:
+                    error = exc
+                failures += 1
+                if failures > MAX_RECONNECTS:
+                    if error is not None:
+                        raise RuntimeError("euler event stream failed") from error
+                    raise RuntimeError(
+                        "euler event stream ended without terminal event"
+                    ) from None
+                await asyncio.sleep(_reconnect_delay(failures))
