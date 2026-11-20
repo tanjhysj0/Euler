@@ -162,7 +162,7 @@ func TestConsumeRoundMapsStreamError(t *testing.T) {
 	pipe.Send(schema.AssistantMessage("partial", nil), nil)
 	pipe.Send(nil, errors.New("upstream failed for key sk-stream-test"))
 	pipe.Close()
-	err := consumeRound(context.Background(), reader, writer)
+	err := consumeRound(reader, writer)
 	require.Error(t, err)
 	var coded *tools.CodedError
 	require.ErrorAs(t, err, &coded)
@@ -179,7 +179,7 @@ func TestConsumeRoundPassesContextError(t *testing.T) {
 	reader, pipe := schema.Pipe[*schema.Message](1)
 	pipe.Send(nil, context.Canceled)
 	pipe.Close()
-	err := consumeRound(context.Background(), reader, writer)
+	err := consumeRound(reader, writer)
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -264,7 +264,7 @@ func (f *runtimeFixture) deps(t *testing.T, chatModel model.ToolCallingChatModel
 		Model: "test-model", APIKey: "sk-runtime-test",
 	}}
 	return Deps{
-		Loader: NewDBLoader(f.db, resolver, workspace.DBWorkspaceFinder{DB: f.db}),
+		Loader: NewDBLoader(f.db, resolver, workspace.DBWorkspaceFinder{DB: f.db}, ""),
 		Events: f.events, Gate: runtimeGate{},
 		Factory: fakeFactory{chatModel: chatModel},
 		Limits: config.AgentLimits{

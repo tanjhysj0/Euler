@@ -282,3 +282,18 @@ var (
 	_ FileStore       = (*unitFiles)(nil)
 	_ Executor        = (*unitExecutor)(nil)
 )
+
+// TestRegistrySubmitReportsCompletion 确认 submit 无需审批即可记录验收摘要，
+// 并由运行时的直接返回分支负责结束。
+func TestRegistrySubmitReportsCompletion(t *testing.T) {
+	recorder := newUnitRecorder()
+	registry := newUnitRegistry(recorder, &unitPublisher{}, &fakeGate{}, 10)
+	built, err := registry.Tools(&unitFiles{}, &unitExecutor{}, "/tmp/unit", nil)
+	require.NoError(t, err)
+	observation, err := invokeUnitTool(t, built, "submit", `{"summary":"验收点全部通过"}`)
+	require.NoError(t, err)
+	require.Contains(t, observation, "验收点全部通过")
+	counts := recorder.counts()
+	require.Equal(t, 1, counts.started)
+	require.Equal(t, 1, counts.succeeded)
+}

@@ -62,14 +62,17 @@ type InputLoader interface {
 // Deps 携带单次 run 所需的全部依赖；每次 Run 都会构建全新的工具闭包，
 // 避免工作区或审批状态在 run 之间泄漏。
 type Deps struct {
-	Loader           InputLoader
-	Events           event.Publisher
-	Gate             approval.Gate
-	Factory          ChatModelFactory
-	Limits           config.AgentLimits
-	ShellTimeout     time.Duration
-	ShellOutputBytes int
-	PreviewBytes     int
+	Loader               InputLoader
+	Events               event.Publisher
+	Gate                 approval.Gate
+	Factory              ChatModelFactory
+	Limits               config.AgentLimits
+	ShellTimeout         time.Duration
+	ShellOutputBytes     int
+	ShellPathPrefix      string
+	ModelTimeout         time.Duration
+	ModelReasoningEffort string
+	PreviewBytes         int
 }
 
 // Runtime 通过 Eino ReAct 循环执行单次 run。
@@ -81,7 +84,10 @@ type Runtime struct {
 // 兼容 chat 模型工厂。
 func NewRuntime(deps Deps) *Runtime {
 	if deps.Factory == nil {
-		deps.Factory = OpenAIChatModelFactory{}
+		deps.Factory = OpenAIChatModelFactory{
+			Timeout:         deps.ModelTimeout,
+			ReasoningEffort: deps.ModelReasoningEffort,
+		}
 	}
 	return &Runtime{deps: deps}
 }
@@ -89,6 +95,7 @@ func NewRuntime(deps Deps) *Runtime {
 const (
 	messageCompleted = "completed"
 	maxStepHeadroom  = 10
+	noToolCalls      = 0
 )
 
 // Run 装载输入并执行一次 run。
@@ -106,11 +113,11 @@ func (rt *Runtime) Run(ctx context.Context, request run.Request) error {
 // RunInput 在已装载的输入上驱动模型/工具循环，过程中将助手增量内容
 // 流式写入消息记录和事件。
 func (rt *Runtime) RunInput(ctx context.Context, input RunInput) error {
-	reactAgent, err := rt.buildAgent(ctx, input)
+	writer := newDeltaWriter(rt.deps.Events, input.Request, input.Messages, input.Model.APIKey)
+	reactAgent, err := rt.buildAgent(ctx, input, writer)
 	if err != nil {
 		return err
 	}
-	writer := newDeltaWriter(rt.deps.Events, input.Request, input.Messages, input.Model.APIKey)
 	return rt.stream(ctx, reactAgent, input.History, writer)
 }
 
@@ -125,13 +132,15 @@ func (*Runtime) stream(
 	if err != nil {
 		return err
 	}
-	group, groupCtx := errgroup.WithContext(ctx)
+	var group errgroup.Group
 	group.Go(func() error { return drainFinal(finalStream) })
-	group.Go(func() error { return consumeFuture(groupCtx, future, writer) })
+	group.Go(func() error { return consumeFuture(future, writer) })
 	return group.Wait()
 }
 
-func (rt *Runtime) buildAgent(ctx context.Context, input RunInput) (*react.Agent, error) {
+func (rt *Runtime) buildAgent(
+	ctx context.Context, input RunInput, writer *deltaWriter,
+) (*react.Agent, error) {
 	base, err := rt.deps.Factory.New(ctx, input.Model)
 	if err != nil {
 		return nil, err
@@ -142,17 +151,64 @@ func (rt *Runtime) buildAgent(ctx context.Context, input RunInput) (*react.Agent
 	if err != nil {
 		return nil, err
 	}
+	checker := func(
+		ctx context.Context, stream *schema.StreamReader[*schema.Message],
+	) (bool, error) {
+		return streamHasToolCalls(ctx, stream, writer)
+	}
 	reactAgent, err := react.NewAgent(ctx, &react.AgentConfig{
 		ToolCallingModel: limited,
 		ToolsConfig: compose.ToolsNodeConfig{
 			Tools: built, ExecuteSequentially: true,
 		},
-		MaxStep: rt.deps.Limits.MaxModelRounds*2 + maxStepHeadroom,
+		MaxStep:               rt.deps.Limits.MaxModelRounds*2 + maxStepHeadroom,
+		StreamToolCallChecker: checker,
+		// submit 是模型显式收尾的信号：工具执行后直接结束，不再进入下一轮模型调用
+		ToolReturnDirectly: map[string]struct{}{tools.SubmitToolName(): {}},
 	})
 	if err != nil {
 		return nil, err
 	}
 	return reactAgent, nil
+}
+
+// streamHasToolCalls 判断整轮模型输出里是否出现工具调用，同时把助手文本
+// 增量写入消息记录。Eino 默认只检查首个非空分片，而 DeepSeek 等模型会先
+// 输出文字再输出工具调用，默认检查会把这种回复误判为普通文本并丢弃工具调用。
+// 因此这里需要读到首个工具调用（或流结束）才能判定；为了让用户仍能实时
+// 看到文本，增量内容在检查过程中直接写入 sink，future 路径只负责排空流。
+func streamHasToolCalls(
+	ctx context.Context, stream *schema.StreamReader[*schema.Message], sink assistantSink,
+) (bool, error) {
+	defer stream.Close()
+	for {
+		message, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return false, sink.flush(ctx)
+		}
+		if err != nil {
+			return false, err
+		}
+		found, err := forwardAssistant(ctx, message, sink)
+		if err != nil || found {
+			return found, err
+		}
+	}
+}
+
+// forwardAssistant 写出一个分片中的助手文本，并报告该分片是否携带工具调用。
+func forwardAssistant(
+	ctx context.Context, message *schema.Message, sink assistantSink,
+) (bool, error) {
+	if message.Role == schema.Assistant && message.Content != emptyContent {
+		if err := sink.add(ctx, message.Content); err != nil {
+			return false, err
+		}
+	}
+	if len(message.ToolCalls) > noToolCalls {
+		return true, sink.flush(ctx)
+	}
+	return false, nil
 }
 
 func drainFinal(stream *schema.StreamReader[*schema.Message]) error {

@@ -115,7 +115,8 @@ func runRun(args []string) error {
 	client, err := runner.NewClient(context.Background(), runner.Options{
 		BaseURL: *baseURL, ProfileID: *profileID, ModelBaseURL: *modelBaseURL,
 		Model: *modelName, APIKeyEnv: *apiKeyEnv, ModelName: *label,
-		RunTimeout: *runTimeout,
+		RunTimeout:    *runTimeout,
+		TranscriptDir: filepath.Join(*outDir, "transcripts"),
 	})
 	if err != nil {
 		return err

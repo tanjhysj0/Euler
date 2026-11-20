@@ -29,6 +29,8 @@ const (
 	emptyCapacity = 0
 	// noTimeout 表示“沿用配置的截止时间”。
 	noTimeout time.Duration = 0
+	// emptyText 表示未配置的可选字符串。
+	emptyText = ""
 )
 
 var (
@@ -40,6 +42,9 @@ var (
 type ShellConfig struct {
 	Timeout        time.Duration
 	MaxOutputBytes int
+	// PathPrefix 非空时会在登录 shell 完成初始化后置于 PATH 最前，
+	// 用于让 python 等运行时与判分环境保持一致。
+	PathPrefix string
 }
 
 // ShellRequest 表示一条宿主命令。Dir 是审批卡片中展示的工作区目录；
@@ -85,7 +90,7 @@ func (s *Shell) Execute(ctx context.Context, request ShellRequest) ShellResult {
 	cmd := exec.CommandContext(shellCtx, defaultShell, loginFlag, stdinFlag)
 	cmd.Dir = request.Dir
 	cmd.Env = SanitizeEnvironment(os.Environ(), request.SecretNames)
-	cmd.Stdin = strings.NewReader(request.Command)
+	cmd.Stdin = strings.NewReader(s.script(request.Command))
 	cmd.Stdout, cmd.Stderr = output, output
 	if err := configureProcessGroup(cmd); err != nil {
 		return ShellResult{Err: err}
@@ -108,6 +113,20 @@ func (s *Shell) RunGuarded(
 		return ShellResult{}, decision, nil
 	}
 	return s.Execute(ctx, call.Shell), decision, nil
+}
+
+// script 在配置了 PathPrefix 时把前缀目录放到 PATH 最前；登录 shell 已读取完
+// 用户配置，因此这里设置的优先级不会被 profile 覆盖。
+func (s *Shell) script(command string) string {
+	if s.config.PathPrefix == emptyText {
+		return command
+	}
+	return "export PATH=" + quoteForShell(s.config.PathPrefix) + ":$PATH\n" + command
+}
+
+// quoteForShell 用单引号包裹路径，供 shell 安全展开。
+func quoteForShell(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 // timeout 优先使用单条命令的截止时间，否则回退到配置值。

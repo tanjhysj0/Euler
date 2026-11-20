@@ -56,6 +56,37 @@ func TestRoundLimitedModelCountsStreamCalls(t *testing.T) {
 	require.Equal(t, 1, base.streamCalls)
 }
 
+func TestRetryModelMapsClientTimeoutToModelTimeoutCode(t *testing.T) {
+	base := &fakeToolCallingModel{generateErrs: []error{context.DeadlineExceeded}}
+	retrying := newRetryModel(base, "key")
+	_, err := retrying.Generate(
+		context.Background(), []*schema.Message{schema.UserMessage("hello")},
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	var coded interface{ ErrorCode() string }
+	require.ErrorAs(t, err, &coded)
+	require.Equal(t, codeModelTimeout, coded.ErrorCode())
+}
+
+func TestStreamTimeoutMapsToModelTimeoutCode(t *testing.T) {
+	base := &fakeToolCallingModel{streamPipeErr: context.DeadlineExceeded}
+	retrying := newRetryModel(base, "key")
+	stream, err := retrying.Stream(
+		context.Background(), []*schema.Message{schema.UserMessage("hello")},
+	)
+	require.NoError(t, err)
+	for {
+		_, err = stream.Recv()
+		if err != nil {
+			break
+		}
+	}
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	var coded interface{ ErrorCode() string }
+	require.ErrorAs(t, err, &coded)
+	require.Equal(t, codeModelTimeout, coded.ErrorCode())
+}
+
 func TestRetryModelRetriesRateLimitThenSucceeds(t *testing.T) {
 	base := &fakeToolCallingModel{generateErrs: []error{
 		&goopenai.APIError{HTTPStatusCode: 429, Message: "slow down"},

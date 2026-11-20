@@ -229,6 +229,41 @@ type codedMessageError struct {
 func (e codedMessageError) Error() string     { return e.msg }
 func (e codedMessageError) ErrorCode() string { return e.code }
 
+// wrappingCodedError 让测试验证“带错误码且包装 DeadlineExceeded”的归因优先级。
+type wrappingCodedError struct {
+	code string
+	msg  string
+	err  error
+}
+
+func (e wrappingCodedError) Error() string     { return e.msg }
+func (e wrappingCodedError) ErrorCode() string { return e.code }
+func (e wrappingCodedError) Unwrap() error     { return e.err }
+
+func TestManagerPrefersModelTimeoutCodeOverRunTimeout(t *testing.T) {
+	store := newUnitFakeStore()
+	runner := &unitFakeRunner{fn: func(context.Context) error {
+		return wrappingCodedError{
+			code: "model_timeout",
+			msg:  "model request timed out",
+			err:  context.DeadlineExceeded,
+		}
+	}}
+	manager := newUnitManager(t, store, runner, time.Second)
+	started, err := manager.Start(context.Background(), uuid.New(), "slow model")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		for _, input := range store.finished() {
+			if input.RunID == started.Run.ID &&
+				input.ErrorCode == "model_timeout" &&
+				input.ErrorMessage == "model request timed out" {
+				return true
+			}
+		}
+		return false
+	}, time.Second, 5*time.Millisecond)
+}
+
 func TestManagerCancelDelegatesToStore(t *testing.T) {
 	store := newUnitFakeStore()
 	manager := newUnitManager(t, store, &unitFakeRunner{block: true}, time.Minute)

@@ -77,12 +77,17 @@ func TestRunTaskAutoApprovesAndExtractsPatch(t *testing.T) {
 	mux.HandleFunc("/api/v1/runs/r1", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"run":{"status":"succeeded"},"tool_calls":[{}],"approvals":[{}]}`)
 	})
+	mux.HandleFunc("/api/v1/sessions/s1/messages", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"messages":[{"id":"m1","role":"assistant","content":"ok"}],"next_after":0}`)
+	})
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
+	transcripts := t.TempDir()
 	client, err := NewClient(context.Background(), Options{
 		BaseURL: server.URL, ModelBaseURL: "http://example", Model: "m",
 		APIKeyEnv: "TEST_KEY", RunTimeout: 5 * time.Second,
+		TranscriptDir: transcripts,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -104,6 +109,13 @@ func TestRunTaskAutoApprovesAndExtractsPatch(t *testing.T) {
 	}
 	if pred.Meta.DurationMS <= 0 {
 		t.Fatalf("duration_ms = %d, want > 0", pred.Meta.DurationMS)
+	}
+	transcript, readErr := os.ReadFile(filepath.Join(transcripts, "demo-001.json"))
+	if readErr != nil {
+		t.Fatalf("读取轨迹: %v", readErr)
+	}
+	if !strings.Contains(string(transcript), `"m1"`) {
+		t.Fatalf("轨迹缺少消息: %s", transcript)
 	}
 }
 

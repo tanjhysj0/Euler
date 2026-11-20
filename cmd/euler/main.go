@@ -94,10 +94,12 @@ func buildServices(cfg config.Config, db *gorm.DB) services {
 	runStore := run.NewStore(db, events, persistence.HealthChecker{DB: db})
 	workspaceFinder := workspace.DBWorkspaceFinder{DB: db}
 	runner := agent.NewRuntime(agent.Deps{
-		Loader: agent.NewDBLoader(db, profiles, workspaceFinder),
+		Loader: agent.NewDBLoader(db, profiles, workspaceFinder, cfg.SystemPromptTemplate),
 		Events: events, Gate: approvals,
 		Limits: cfg.Agent, ShellTimeout: cfg.ShellTimeout,
 		ShellOutputBytes: cfg.ShellOutputBytes, PreviewBytes: cfg.PreviewBytes,
+		ShellPathPrefix: cfg.ShellPathPrefix, ModelTimeout: cfg.ModelTimeout,
+		ModelReasoningEffort: cfg.ModelReasoningEffort,
 	})
 	return services{
 		profiles:  profiles,

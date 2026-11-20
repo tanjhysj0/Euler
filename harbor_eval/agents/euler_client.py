@@ -131,6 +131,27 @@ class EulerClient:
         response.raise_for_status()
         return response.json()
 
+    async def messages(self, session_id: str) -> list[dict]:
+        """按分页读取会话的全部消息，供轨迹存档使用。"""
+        items: list[dict] = []
+        after = 0
+        page_size = 200
+        while True:
+            params: dict[str, str] = {"limit": str(page_size)}
+            if after > 0:
+                params["after"] = str(after)
+            response = await self._client.get(
+                f"/api/v1/sessions/{session_id}/messages", params=params
+            )
+            response.raise_for_status()
+            page = response.json()
+            batch = page.get("messages") or []
+            items.extend(batch)
+            next_after = int(page.get("next_after") or 0)
+            if not batch or next_after <= after:
+                return items
+            after = next_after
+
     async def cancel(self, run_id: str) -> None:
         """取消 run。"""
         response = await self._client.post(f"/api/v1/runs/{run_id}/cancel")

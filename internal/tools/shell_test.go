@@ -67,6 +67,22 @@ func TestShellReportsExitCode(t *testing.T) {
 	require.False(t, result.Truncated)
 }
 
+func TestShellPathPrefixOverridesLoginPath(t *testing.T) {
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "python3")
+	require.NoError(t, os.WriteFile( //nolint:gosec // 测试垫片必须可执行
+		shim, []byte("#!/bin/sh\necho shim-python\n"), 0o755,
+	))
+	executor := NewShellExecutor(ShellConfig{
+		Timeout: 10 * time.Second, MaxOutputBytes: 1024, PathPrefix: dir,
+	})
+	result := executor.Execute(context.Background(), ShellRequest{
+		Dir: t.TempDir(), Command: "python3 --version",
+	})
+	require.NoError(t, result.Err)
+	require.Equal(t, "shim-python", strings.TrimSpace(result.Output))
+}
+
 func TestShellStripsSecretsFromChildEnvironment(t *testing.T) {
 	t.Setenv("EULER_TEST_MODEL_KEY", "sk-shell-secret")
 	executor := NewShellExecutor(ShellConfig{Timeout: 10 * time.Second, MaxOutputBytes: 1024})

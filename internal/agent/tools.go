@@ -26,6 +26,7 @@ func (rt *Runtime) buildTools(input RunInput) ([]tool.BaseTool, error) {
 		workspace.NewFileStore(input.Dir, rt.deps.PreviewBytes),
 		tools.NewShellExecutor(tools.ShellConfig{
 			Timeout: rt.deps.ShellTimeout, MaxOutputBytes: rt.deps.ShellOutputBytes,
+			PathPrefix: rt.deps.ShellPathPrefix,
 		}),
 		input.Dir, input.Secrets,
 	)

@@ -75,10 +75,16 @@ func (w *deltaWriter) flush(ctx context.Context) error {
 	return nil
 }
 
-// consumeFuture 遍历每一轮的模型 stream；助手文本增量写入，
-// 而 tool 角色的消息只消费不展示。
+// assistantSink 接收助手文本增量；生产实现是 deltaWriter，测试可注入内存实现。
+type assistantSink interface {
+	add(ctx context.Context, content string) error
+	flush(ctx context.Context) error
+}
+
+// consumeFuture 遍历每一轮的模型 stream 并排空；助手文本已由工具调用检查器
+// 在读取过程中写入 sink，这里只负责让流继续前进并传播错误。
 func consumeFuture(
-	ctx context.Context, future react.MessageFuture, writer *deltaWriter,
+	future react.MessageFuture, writer *deltaWriter,
 ) error {
 	streams := future.GetMessageStreams()
 	for {
@@ -87,33 +93,28 @@ func consumeFuture(
 			return err
 		}
 		if !ok {
-			return writer.flush(ctx)
+			return nil
 		}
-		if err := consumeRound(ctx, stream, writer); err != nil {
+		if err := consumeRound(stream, writer); err != nil {
 			return err
 		}
 	}
 }
 
 func consumeRound(
-	ctx context.Context, stream *schema.StreamReader[*schema.Message], writer *deltaWriter,
+	stream *schema.StreamReader[*schema.Message], writer *deltaWriter,
 ) error {
 	defer stream.Close()
 	for {
-		message, err := stream.Recv()
+		_, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
-			return writer.flush(ctx)
+			return nil
 		}
 		if err != nil {
 			if isContextError(err) {
 				return err
 			}
 			return mapModelError(err, writer.apiKey)
-		}
-		if message.Role == schema.Assistant && message.Content != emptyContent {
-			if err := writer.add(ctx, message.Content); err != nil {
-				return err
-			}
 		}
 	}
 }

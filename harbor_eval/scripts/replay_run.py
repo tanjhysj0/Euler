@@ -67,6 +67,22 @@ def reconstruct(calls: list[dict], root: Path) -> list[str]:
     return warnings
 
 
+def run_id_from_result(path: Path) -> str:
+    """从 trial 的 result.json 中读取 Euler run_id；也接受 job 目录。"""
+    target = Path(path)
+    if target.is_dir():
+        candidates = sorted(target.glob("*/result.json"))
+        if not candidates:
+            raise ReplayError(f"目录中没有 trial result.json: {target}")
+        target = candidates[0]
+    data = json.loads(target.read_text(encoding="utf-8"))
+    metadata = (data.get("agent_result") or {}).get("metadata") or {}
+    run_id = metadata.get("run_id")
+    if not run_id:
+        raise ReplayError(f"结果中没有 run_id: {target}")
+    return str(uuid.UUID(str(run_id)))
+
+
 def fetch_tool_calls(
     run_id: str, container: str, db_name: str, db_user: str
 ) -> list[dict]:
@@ -121,7 +137,8 @@ def run_official_tests(task_dir: Path, work: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="重放 Euler run 的最终工作区")
-    parser.add_argument("--run-id", required=True, help="Euler run UUID")
+    parser.add_argument("--run-id", help="Euler run UUID")
+    parser.add_argument("--from-result", help="Harbor trial 的 result.json 路径")
     parser.add_argument("--out", required=True, help="重建输出目录")
     parser.add_argument("--db-container", default="euler-postgres-1")
     parser.add_argument("--db-name", default="euler")
@@ -132,14 +149,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.from_result:
+            run_id = run_id_from_result(Path(args.from_result))
+        elif args.run_id:
+            run_id = str(uuid.UUID(args.run_id))
+        else:
+            raise ReplayError("必须提供 --run-id 或 --from-result")
         calls = fetch_tool_calls(
-            args.run_id, args.db_container, args.db_name, args.db_user
+            run_id, args.db_container, args.db_name, args.db_user
         )
     except ReplayError as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
-    work = Path(args.out)
+    work = Path(args.out).resolve()
     if work.exists():
         shutil.rmtree(work)
     try:

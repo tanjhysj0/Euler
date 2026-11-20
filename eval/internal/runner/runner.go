@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -32,6 +34,7 @@ const (
 	statusError       = "error"
 	statusPatchTooBig = "patch_too_large"
 	autoApproveReason = "euleval auto-approve"
+	transcriptTimeout = 10 * time.Second
 )
 
 // Options 是连接 Euler 服务所需的配置。
@@ -43,17 +46,20 @@ type Options struct {
 	APIKeyEnv    string
 	ModelName    string
 	RunTimeout   time.Duration
+	// TranscriptDir 非空时，把每题会话消息写入该目录，供失败复盘。
+	TranscriptDir string
 }
 
 // Client 是 Euler API 的轻量客户端。
 // jsonClient 用于普通 JSON 请求，sseClient 用于长连接的 SSE 订阅，两者共享 cookie jar。
 type Client struct {
-	baseURL    string
-	jsonClient *http.Client
-	sseClient  *http.Client
-	profileID  string
-	modelName  string
-	runTimeout time.Duration
+	baseURL     string
+	jsonClient  *http.Client
+	sseClient   *http.Client
+	profileID   string
+	modelName   string
+	runTimeout  time.Duration
+	transcripts string
 }
 
 // NewClient 完成健康检查、cookie 获取与模型配置准备。
@@ -63,12 +69,13 @@ func NewClient(ctx context.Context, opts Options) (*Client, error) {
 		return nil, err
 	}
 	client := &Client{
-		baseURL:    strings.TrimRight(opts.BaseURL, "/"),
-		jsonClient: &http.Client{Jar: jar, Timeout: jsonTimeout},
-		sseClient:  &http.Client{Jar: jar},
-		profileID:  opts.ProfileID,
-		modelName:  opts.ModelName,
-		runTimeout: opts.RunTimeout,
+		baseURL:     strings.TrimRight(opts.BaseURL, "/"),
+		jsonClient:  &http.Client{Jar: jar, Timeout: jsonTimeout},
+		sseClient:   &http.Client{Jar: jar},
+		profileID:   opts.ProfileID,
+		modelName:   opts.ModelName,
+		runTimeout:  opts.RunTimeout,
+		transcripts: opts.TranscriptDir,
 	}
 	if client.runTimeout <= 0 {
 		client.runTimeout = defaultRunTimeout
@@ -215,6 +222,15 @@ func (c *Client) RunTask(
 		pred.Meta.Error = err.Error()
 		return pred
 	}
+	// 即使超时或失败也尽力保存会话轨迹，便于离线复盘
+	defer func() {
+		traceCtx, traceCancel := context.WithTimeout(
+			context.WithoutCancel(ctx), transcriptTimeout)
+		defer traceCancel()
+		if err := c.writeTranscript(traceCtx, t.ID, created.ID); err != nil {
+			pred.Meta.TranscriptError = err.Error()
+		}
+	}()
 	var startedRun struct {
 		Run struct {
 			ID string `json:"id"`
@@ -284,6 +300,57 @@ func (c *Client) cancelRun(runID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), cancelTimeout)
 	defer cancel()
 	_ = c.doJSON(ctx, http.MethodPost, "/api/v1/runs/"+runID+"/cancel", nil, nil)
+}
+
+type messagePage struct {
+	Messages  []json.RawMessage `json:"messages"`
+	NextAfter int64             `json:"next_after"`
+}
+
+// sessionMessages 分页读取会话的全部消息。
+func (c *Client) sessionMessages(
+	ctx context.Context, sessionID string,
+) ([]json.RawMessage, error) {
+	var all []json.RawMessage
+	var after int64
+	for {
+		path := fmt.Sprintf("/api/v1/sessions/%s/messages?limit=200", sessionID)
+		if after > 0 {
+			path += fmt.Sprintf("&after=%d", after)
+		}
+		var page messagePage
+		if err := c.doJSON(ctx, http.MethodGet, path, nil, &page); err != nil {
+			return nil, err
+		}
+		all = append(all, page.Messages...)
+		if len(page.Messages) == 0 || page.NextAfter <= after {
+			return all, nil
+		}
+		after = page.NextAfter
+	}
+}
+
+// writeTranscript 把会话消息写入 TranscriptDir；未配置目录时直接跳过。
+func (c *Client) writeTranscript(
+	ctx context.Context, instanceID, sessionID string,
+) error {
+	if c.transcripts == "" {
+		return nil
+	}
+	messages, err := c.sessionMessages(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if err = os.MkdirAll(c.transcripts, 0o750); err != nil {
+		return err
+	}
+	payload := map[string]any{"session_id": sessionID, "messages": messages}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(c.transcripts, instanceID+".json")
+	return os.WriteFile(path, append(data, '\n'), 0o644) //nolint:gosec // 轨迹文件按常规权限写入
 }
 
 func (c *Client) snapshot(ctx context.Context, runID string) (runSnapshot, error) {

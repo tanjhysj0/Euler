@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import posixpath
 import shlex
@@ -25,14 +26,27 @@ RECONNECT_DELAY_SECONDS = 1.0
 HEALTH_RETRIES = 30
 HEALTH_RETRY_DELAY_SECONDS = 1.0
 DANGEROUS_WORKDIRS = frozenset({"/", "/opt", BASELINE_DIR})
+# 预算耗尽但工作区已有产出时按完成收尾，避免把已交付的结果记为异常
+ROUND_LIMIT_CODE = "model_round_limit"
+EXECUTION_GUIDANCE = (
+    "执行约束：\n"
+    "1. 开始前列出指令中的验收点，实现后用一条端到端命令逐项确认。\n"
+    "2. 工作区没有随任务提供的测试；不要新建超出任务要求的测试文件，"
+    "用最小脚本或命令验证即可。\n"
+    "3. 控制流只处理一次：不要重复取消或中断已经进入清理阶段的任务，清理必须能完成。\n"
+    "4. 连续两次执行相同或等价命令且结果无变化时，立即更换策略。\n"
+    "5. 自测失败时先写出根因，再改代码。\n"
+    "6. 验收点全部通过后立即调用 submit 工具结束运行，不要重复验证同一条路径。\n"
+    "7. 结束前在回复中逐条列出验收点、验证方式与结果；未验证项必须标注。"
+)
 
 
 def build_instruction(instruction: str, workspace: str, workdir: str) -> str:
-    """把官方指令中的容器路径映射到宿主机工作区。"""
+    """把官方指令中的容器路径映射到宿主机工作区，并附加执行约束。"""
     prefix = (
         f"你的工作区目录是 {workspace}（原任务中的 {workdir} 对应此目录）。"
     )
-    return f"{prefix}\n\n{instruction}"
+    return f"{prefix}\n\n{EXECUTION_GUIDANCE}\n\n{instruction}"
 
 
 def validate_workdir(workdir: str) -> str:
@@ -55,6 +69,16 @@ def validate_host_workspace(path: str) -> str:
             f"host workspace must be {DEFAULT_WORKSPACE}: {normalized!r}"
         )
     return normalized
+
+
+def _optional_int(value: str | None) -> int | None:
+    """把可选的环境变量解析为整数；非法值视为未声明。"""
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 def _reconnect_delay(attempt: int) -> float:
@@ -105,6 +129,10 @@ class EulerAgent(BaseAgent):
         self.model = os.environ.get("EULER_MODEL") or None
         self.secret_ref = os.environ.get("EULER_MODEL_KEY_ENV", "OPENAI_API_KEY")
         self.agent_timeout = float(os.environ.get("EULER_AGENT_TIMEOUT", "840"))
+        self.max_model_rounds = _optional_int(
+            os.environ.get("EULER_MAX_MODEL_ROUNDS")
+        )
+        self.reasoning_effort = os.environ.get("EULER_REASONING_EFFORT") or None
 
     def version(self) -> str:
         return "0.1.0"
@@ -146,14 +174,23 @@ class EulerAgent(BaseAgent):
                     snapshot = await client.snapshot(run_id)
                 except TimeoutError:
                     raise RuntimeError("euler run timed out") from None
+                run_info = snapshot.get("run") or {}
+                status = run_info.get("status")
                 context.metadata = {
                     "run_id": run_id,
                     "session_id": session_id,
                     "tool_calls": len(snapshot.get("tool_calls") or []),
                     "approvals": len(snapshot.get("approvals") or []),
+                    "status": status,
                     "outcome": "failed",
+                    "model": self.model,
+                    "max_model_rounds": self.max_model_rounds,
+                    "reasoning_effort": self.reasoning_effort,
                 }
-                status = (snapshot.get("run") or {}).get("status")
+                if run_info.get("error_code"):
+                    context.metadata["error_code"] = run_info["error_code"]
+                if run_info.get("error_message"):
+                    context.metadata["error_message"] = run_info["error_message"]
                 if status == "succeeded":
                     # 零工具调用且工作区无改动，属于空跑，单独标记为异常
                     no_action = (
@@ -163,7 +200,19 @@ class EulerAgent(BaseAgent):
                     context.metadata["outcome"] = (
                         "no_action" if no_action else "completed"
                     )
-                if status != "succeeded":
+                elif (
+                    run_info.get("error_code") == ROUND_LIMIT_CODE
+                    and workspace_changed(workspace)
+                ):
+                    # 轮次预算耗尽前已产生改动，视为完成交付而非失败
+                    context.metadata["outcome"] = "budget_exhausted"
+                await self._write_trace(
+                    client, environment, run_id, session_id, snapshot
+                )
+                if (
+                    status != "succeeded"
+                    and context.metadata["outcome"] != "budget_exhausted"
+                ):
                     raise RuntimeError(f"euler run ended with status={status}")
                 run_finished = True
             finally:
@@ -178,6 +227,42 @@ class EulerAgent(BaseAgent):
             await client.cancel(run_id)
         except Exception:
             pass
+
+    async def _write_trace(
+        self,
+        client: EulerClient,
+        environment: BaseEnvironment,
+        run_id: str,
+        session_id: str,
+        snapshot: dict,
+    ) -> None:
+        """把 run 快照、对话与运行时信息落到 trial 日志目录，便于事后复盘。"""
+        trace: dict = {
+            "run_id": run_id,
+            "session_id": session_id,
+            "model": self.model,
+            "max_model_rounds": self.max_model_rounds,
+            "reasoning_effort": self.reasoning_effort,
+            "run": snapshot.get("run"),
+            "tool_calls": snapshot.get("tool_calls") or [],
+            "approvals": snapshot.get("approvals") or [],
+            "messages": [],
+        }
+        try:
+            trace["messages"] = await client.messages(session_id)
+        except Exception as exc:
+            # 轨迹拉取失败不影响评测结论，但必须留下失败原因
+            trace["messages_error"] = str(exc)
+        try:
+            version = await environment.exec(command="python3 --version")
+            trace["container_python"] = (version.stdout or "").strip()
+        except Exception as exc:
+            trace["container_python_error"] = str(exc)
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        path = self.logs_dir / "euler-trace.json"
+        path.write_text(
+            json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
     async def _wait_health(self, client: EulerClient) -> None:
         for _ in range(HEALTH_RETRIES):

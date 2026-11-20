@@ -17,6 +17,9 @@
 # 本地 worktree 目录
 /.worktrees/
 
+# IDE 本地配置与计划草稿
+/.trae/
+
 # 日志
 *.log
 

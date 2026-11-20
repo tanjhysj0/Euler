@@ -81,7 +81,7 @@ type Registry struct {
 // NewRegistry 为一次运行构建注册表。
 func NewRegistry(deps RegistryDeps) *Registry { return &Registry{deps: deps} }
 
-// Tools 组装绑定到单个工作区目录的七个 agent 工具。
+// Tools 组装绑定到单个工作区目录的八个 agent 工具。
 func (r *Registry) Tools(
 	files FileStore, executor Executor, dir string, secrets []string,
 ) ([]tool.BaseTool, error) {
@@ -93,7 +93,11 @@ func (r *Registry) Tools(
 	if err != nil {
 		return nil, err
 	}
-	return append(built, shellTool), nil
+	submitTool, err := r.submitTool()
+	if err != nil {
+		return nil, err
+	}
+	return append(built, shellTool, submitTool), nil
 }
 
 // toolOutcome 是工具函数向注册表回报的结果。只读工具直接填写 observation；

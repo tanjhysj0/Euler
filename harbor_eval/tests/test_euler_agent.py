@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -51,6 +52,9 @@ class FakeRunClient(FakeClient):
     async def snapshot(self, run_id):
         return {"run": {"status": "succeeded"}}
 
+    async def messages(self, session_id):
+        return []
+
     async def cancel(self, run_id):
         self.cancelled.append(run_id)
 
@@ -69,7 +73,8 @@ class FakeEnvironment:
 
     async def exec(self, command):
         self.commands.append(command)
-        return SimpleNamespace(stdout="/app\n", stderr="", return_code=0)
+        stdout = "Python 3.13.5\n" if command == "python3 --version" else "/app\n"
+        return SimpleNamespace(stdout=stdout, stderr="", return_code=0)
 
 
 class FakeHealthClient:
@@ -310,11 +315,20 @@ def test_run_records_failed_outcome_before_raising(tmp_path, monkeypatch):
     client = FakeRunClient([[Event(1, "run.failed", {})]])
 
     async def snapshot(_run_id):
-        return {"run": {"status": "failed"}}
+        return {
+            "run": {
+                "status": "failed",
+                "error_code": "model_round_limit",
+                "error_message": "model round limit exceeded",
+            }
+        }
 
     client.snapshot = snapshot
     monkeypatch.setattr("agents.euler_agent.EulerClient", lambda base_url: client)
     monkeypatch.setattr("agents.euler_agent.git_baseline", lambda workspace: None)
+    monkeypatch.setattr(
+        "agents.euler_agent.workspace_changed", lambda workspace: False
+    )
     agent = make_agent(tmp_path)
     agent.workspace = DEFAULT_WORKSPACE
     context = SimpleNamespace(metadata=None)
@@ -323,6 +337,85 @@ def test_run_records_failed_outcome_before_raising(tmp_path, monkeypatch):
         asyncio.run(agent.run("fix", FakeEnvironment(), context))
 
     assert context.metadata["outcome"] == "failed"
+    assert context.metadata["error_code"] == "model_round_limit"
+    assert context.metadata["error_message"] == "model round limit exceeded"
+
+
+def test_run_treats_round_limit_with_output_as_delivered(tmp_path, monkeypatch):
+    # 轮次耗尽但工作区已有改动时按完成收尾，不再抛出异常
+    client = FakeRunClient([[Event(1, "run.failed", {})]])
+
+    async def snapshot(_run_id):
+        return {
+            "run": {"status": "failed", "error_code": "model_round_limit"},
+            "tool_calls": [{}],
+        }
+
+    client.snapshot = snapshot
+    monkeypatch.setattr("agents.euler_agent.EulerClient", lambda base_url: client)
+    monkeypatch.setattr("agents.euler_agent.git_baseline", lambda workspace: None)
+    monkeypatch.setattr(
+        "agents.euler_agent.workspace_changed", lambda workspace: True
+    )
+    agent = make_agent(tmp_path)
+    agent.workspace = DEFAULT_WORKSPACE
+    context = SimpleNamespace(metadata=None)
+
+    asyncio.run(agent.run("fix", FakeEnvironment(), context))
+
+    assert context.metadata["outcome"] == "budget_exhausted"
+    assert context.metadata["error_code"] == "model_round_limit"
+
+
+def test_run_writes_trace_artifact(tmp_path, monkeypatch):
+    client = FakeRunClient([[Event(1, "run.completed", {})]])
+
+    async def messages(_session_id):
+        return [{"role": "assistant", "content": "done"}]
+
+    client.messages = messages
+    monkeypatch.setattr("agents.euler_agent.EulerClient", lambda base_url: client)
+    monkeypatch.setattr("agents.euler_agent.git_baseline", lambda workspace: None)
+    monkeypatch.setattr(
+        "agents.euler_agent.workspace_changed", lambda workspace: True
+    )
+    agent = make_agent(tmp_path)
+    agent.workspace = DEFAULT_WORKSPACE
+    context = SimpleNamespace(metadata=None)
+
+    asyncio.run(agent.run("fix", FakeEnvironment(), context))
+
+    trace = json.loads((tmp_path / "euler-trace.json").read_text(encoding="utf-8"))
+    assert trace["run_id"] == "run-1"
+    assert trace["session_id"] == "session-1"
+    assert trace["run"]["status"] == "succeeded"
+    assert trace["messages"][0]["content"] == "done"
+    assert trace["container_python"] == "Python 3.13.5"
+
+
+def test_run_records_model_and_declared_budget(tmp_path, monkeypatch):
+    monkeypatch.setenv("EULER_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("EULER_MAX_MODEL_ROUNDS", "24")
+    monkeypatch.setenv("EULER_REASONING_EFFORT", "max")
+    client = FakeRunClient([[Event(1, "run.completed", {})]])
+    monkeypatch.setattr("agents.euler_agent.EulerClient", lambda base_url: client)
+    monkeypatch.setattr("agents.euler_agent.git_baseline", lambda workspace: None)
+    monkeypatch.setattr(
+        "agents.euler_agent.workspace_changed", lambda workspace: True
+    )
+    agent = make_agent(tmp_path)
+    agent.workspace = DEFAULT_WORKSPACE
+    context = SimpleNamespace(metadata=None)
+
+    asyncio.run(agent.run("fix", FakeEnvironment(), context))
+
+    assert context.metadata["model"] == "deepseek-v4-pro"
+    assert context.metadata["max_model_rounds"] == 24
+    assert context.metadata["reasoning_effort"] == "max"
+    trace = json.loads((tmp_path / "euler-trace.json").read_text(encoding="utf-8"))
+    assert trace["model"] == "deepseek-v4-pro"
+    assert trace["max_model_rounds"] == 24
+    assert trace["reasoning_effort"] == "max"
 
 
 def test_validate_host_workspace_rejects_unsafe_paths():

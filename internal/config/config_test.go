@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -19,6 +20,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DatabaseURL == "" || cfg.Agent.MaxModelRounds != 12 {
 		t.Fatalf("cfg=%+v", cfg)
 	}
+	if cfg.ModelTimeout != 2*time.Minute {
+		t.Fatalf("model_timeout=%v", cfg.ModelTimeout)
+	}
 	if !strings.HasSuffix(cfg.WorkspaceRoot, "EulerWorkspaces") {
 		t.Fatal(cfg.WorkspaceRoot)
 	}
@@ -30,6 +34,43 @@ func TestLoadRejectsInvalidLimits(t *testing.T) {
 	body := []byte("agent:\n  max_model_rounds: 0\n  max_tool_calls: 40\n" +
 		"  max_duration: 15m\n  max_output_bytes: 65536\n")
 	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestLoadParsesAgentDuration(t *testing.T) {
+	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("agent:\n  max_duration: 15m\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.MaxDuration != 15*time.Minute {
+		t.Fatalf("max_duration = %v", cfg.Agent.MaxDuration)
+	}
+}
+
+func TestLoadRejectsUnknownReasoningEffort(t *testing.T) {
+	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("model_reasoning_effort: turbo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestLoadRejectsRelativeShellPathPrefix(t *testing.T) {
+	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("shell_path_prefix: runtime/bin\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err == nil {

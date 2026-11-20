@@ -31,6 +31,9 @@ const (
 	codeModelUnavailable = "model_unavailable"
 	codeModelProtocol    = "model_protocol"
 	codeModelRoundLimit  = "model_round_limit"
+	codeModelTimeout     = "model_timeout"
+
+	defaultModelTimeout = 120 * time.Second
 
 	maxModelRetries = 2
 	firstAttempt    = 0
@@ -43,21 +46,39 @@ const (
 	statusForbidden    = 403
 	statusRateLimited  = 429
 	statusServerError  = 500
+
+	zeroTimeout time.Duration = 0
 )
 
 // OpenAIChatModelFactory 构建真实的 OpenAI 兼容 chat 模型。
-type OpenAIChatModelFactory struct{}
+type OpenAIChatModelFactory struct {
+	// Timeout 是单次模型请求的截止时间；零值使用默认值。
+	Timeout time.Duration
+	// ReasoningEffort 非空时透传给模型，如 low/medium/high/max。
+	ReasoningEffort string
+}
 
 // New 为指定模型参数创建一个 chat 模型。
-func (OpenAIChatModelFactory) New(
+func (f OpenAIChatModelFactory) New(
 	ctx context.Context, spec ModelSpec,
 ) (model.ToolCallingChatModel, error) {
-	chatModel, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
+	timeout := f.Timeout
+	if timeout <= zeroTimeout {
+		timeout = defaultModelTimeout
+	}
+	config := &openai.ChatModelConfig{
 		APIKey:  spec.APIKey,
 		BaseURL: spec.BaseURL,
 		Model:   spec.Model,
-		Timeout: 60 * time.Second,
-	})
+		Timeout: timeout,
+	}
+	if f.ReasoningEffort != "" {
+		// 通过 ExtraFields 透传，兼容 low/high/max 等厂商自有取值
+		config.ExtraFields = map[string]any{
+			"reasoning_effort": f.ReasoningEffort,
+		}
+	}
+	chatModel, err := openai.NewChatModel(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("create openai model: %w", err)
 	}
@@ -147,7 +168,7 @@ func (m *retryModel) Generate(
 			return msg, nil
 		}
 		if !retryable(ctx, err, attempt) {
-			return nil, m.mapError(err)
+			return nil, m.mapError(ctx, err)
 		}
 		if waitErr := waitRetry(ctx, attempt); waitErr != nil {
 			return nil, waitErr
@@ -162,10 +183,10 @@ func (m *retryModel) Stream(
 	for attempt := firstAttempt; ; attempt++ {
 		stream, err := m.base.Stream(ctx, input, opts...)
 		if err == nil {
-			return wrapStreamErrors(stream, m.apiKey), nil
+			return wrapStreamErrors(ctx, stream, m.apiKey), nil
 		}
 		if !retryable(ctx, err, attempt) {
-			return nil, m.mapError(err)
+			return nil, m.mapError(ctx, err)
 		}
 		if waitErr := waitRetry(ctx, attempt); waitErr != nil {
 			return nil, waitErr
@@ -184,7 +205,16 @@ func (m *retryModel) WithTools(
 	return newRetryModel(wrapped, m.apiKey), nil
 }
 
-func (m *retryModel) mapError(err error) error {
+// mapError 区分“run 截止”与“单次模型请求超时”：前者保留 context 错误，
+// 后者映射为 model_timeout，避免归因成 run_timeout。
+func (m *retryModel) mapError(ctx context.Context, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		return &tools.CodedError{
+			Code: codeModelTimeout,
+			Msg:  "model request timed out",
+			Err:  err,
+		}
+	}
 	if isContextError(err) {
 		return err
 	}
@@ -200,11 +230,20 @@ func (m *retryModel) IsCallbacksEnabled() bool {
 // wrapStreamErrors 映射流中途的失败但不重试；context 错误原样透传，
 // 使取消操作保持其 run 语义。
 func wrapStreamErrors(
-	stream *schema.StreamReader[*schema.Message], apiKey string,
+	ctx context.Context,
+	stream *schema.StreamReader[*schema.Message],
+	apiKey string,
 ) *schema.StreamReader[*schema.Message] {
 	return schema.StreamReaderWithConvert(stream,
 		func(msg *schema.Message) (*schema.Message, error) { return msg, nil },
 		schema.WithErrWrapper(func(err error) error {
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				return &tools.CodedError{
+					Code: codeModelTimeout,
+					Msg:  "model stream timed out",
+					Err:  err,
+				}
+			}
 			if isContextError(err) {
 				return err
 			}

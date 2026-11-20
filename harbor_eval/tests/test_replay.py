@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -87,3 +88,45 @@ def test_reconstruct_deletes_file(tmp_path):
     replay.reconstruct(calls, tmp_path)
 
     assert not (tmp_path / "tmp.txt").exists()
+
+
+def test_run_id_from_result_reads_metadata(tmp_path):
+    replay = load_replay()
+    path = tmp_path / "result.json"
+    path.write_text(
+        json.dumps(
+            {"agent_result": {"metadata": {"run_id": "875b3db3-5374-4a15-a6bb-279a944627e0"}}}
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        replay.run_id_from_result(path)
+        == "875b3db3-5374-4a15-a6bb-279a944627e0"
+    )
+
+
+def test_run_id_from_result_accepts_job_directory(tmp_path):
+    replay = load_replay()
+    trial = tmp_path / "cancel-async-tasks__abc123"
+    trial.mkdir()
+    (trial / "result.json").write_text(
+        json.dumps(
+            {"agent_result": {"metadata": {"run_id": "875b3db3-5374-4a15-a6bb-279a944627e0"}}}
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        replay.run_id_from_result(tmp_path)
+        == "875b3db3-5374-4a15-a6bb-279a944627e0"
+    )
+
+
+def test_run_id_from_result_rejects_missing_metadata(tmp_path):
+    replay = load_replay()
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps({"agent_result": {}}), encoding="utf-8")
+
+    with pytest.raises(replay.ReplayError, match="run_id"):
+        replay.run_id_from_result(path)

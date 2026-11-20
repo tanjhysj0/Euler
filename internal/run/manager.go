@@ -163,16 +163,8 @@ func (m *Manager) finish(ctx context.Context, request Request, runErr error) {
 		m.interruptRun(ctx, request.RunID)
 	case errors.Is(runErr, context.Canceled):
 		m.cancelRun(ctx, request.RunID)
-	case errors.Is(runErr, context.DeadlineExceeded):
-		m.finishRun(ctx, FinishInput{
-			RunID:         request.RunID,
-			Status:        StatusFailed,
-			MessageStatus: messageFailed,
-			ErrorCode:     codeRunTimeout,
-			ErrorMessage:  "run timed out",
-			EventType:     eventRunFailed,
-		})
 	case errors.As(runErr, &coded):
+		// 模型请求超时会包装 DeadlineExceeded，必须优先按错误码归因
 		slog.Error("run failed", logKeyRunID, request.RunID,
 			logKeyError, logging.Redact(runErr.Error()))
 		m.finishRun(ctx, FinishInput{
@@ -181,6 +173,15 @@ func (m *Manager) finish(ctx context.Context, request Request, runErr error) {
 			MessageStatus: messageFailed,
 			ErrorCode:     coded.ErrorCode(),
 			ErrorMessage:  logging.Redact(runErr.Error()),
+			EventType:     eventRunFailed,
+		})
+	case errors.Is(runErr, context.DeadlineExceeded):
+		m.finishRun(ctx, FinishInput{
+			RunID:         request.RunID,
+			Status:        StatusFailed,
+			MessageStatus: messageFailed,
+			ErrorCode:     codeRunTimeout,
+			ErrorMessage:  "run timed out",
 			EventType:     eventRunFailed,
 		})
 	default:

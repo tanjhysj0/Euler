@@ -45,6 +45,30 @@ def test_client_bootstraps_and_persists_cookie():
     assert "euler_local=token" in seen["cookie"]
 
 
+def test_client_pages_session_messages():
+    pages = {
+        0: {"messages": [{"id": "m1"}], "next_after": 1},
+        1: {"messages": [{"id": "m2"}], "next_after": 0},
+    }
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/bootstrap":
+            return httpx.Response(204)
+        after = int(request.url.params.get("after", "0"))
+        seen.append(after)
+        return httpx.Response(200, json=pages[after])
+
+    async def scenario():
+        async with EulerClient(
+            "http://euler", transport=httpx.MockTransport(handler)
+        ) as client:
+            return await client.messages("session-1")
+
+    assert [item["id"] for item in run(scenario())] == ["m1", "m2"]
+    assert seen == [0, 1]
+
+
 def test_start_run_reads_nested_run_id():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(202, json={"run": {"id": "run-1"}, "user_message": {}})

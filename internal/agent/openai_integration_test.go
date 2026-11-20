@@ -114,6 +114,7 @@ func openAIDeps(t *testing.T, fixture *runtimeFixture, baseURL string) Deps {
 			BaseURL: baseURL, Model: "test-model", APIKey: "sk-openai-test",
 		}},
 		workspace.DBWorkspaceFinder{DB: fixture.db},
+		"",
 	)
 	return deps
 }

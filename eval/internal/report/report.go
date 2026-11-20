@@ -23,6 +23,7 @@ type Meta struct {
 	DiffDeleted      int    `json:"diff_deleted"`
 	TouchedTestFiles bool   `json:"touched_test_files"`
 	Error            string `json:"error,omitempty"`
+	TranscriptError  string `json:"transcript_error,omitempty"`
 }
 
 // Prediction 是 preds.jsonl 的一行。

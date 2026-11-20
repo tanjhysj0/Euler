@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"embed"
 	"fmt"
+	"strings"
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
@@ -13,6 +15,17 @@ import (
 	"euler/internal/run"
 	"euler/internal/tools"
 	"euler/internal/workspace"
+)
+
+// promptFS 保存各类 Agent 的 system prompt 模板；模板放在固定目录中，
+// 通过配置名选择，便于后续增加多类 Agent。
+//
+//go:embed prompts/*.md
+var promptFS embed.FS
+
+const (
+	defaultPromptTemplate = "coding"
+	promptPlaceholder     = "{{workspace}}"
 )
 
 const (
@@ -26,13 +39,19 @@ type DBLoader struct {
 	db         *gorm.DB
 	profiles   modelprofile.Resolver
 	workspaces workspace.WorkspaceFinder
+	promptName string
 }
 
-// NewDBLoader 组装数据库输入装载器。
+// NewDBLoader 组装数据库输入装载器。promptName 为空时使用默认模板。
 func NewDBLoader(
-	db *gorm.DB, profiles modelprofile.Resolver, workspaces workspace.WorkspaceFinder,
+	db *gorm.DB,
+	profiles modelprofile.Resolver,
+	workspaces workspace.WorkspaceFinder,
+	promptName string,
 ) *DBLoader {
-	return &DBLoader{db: db, profiles: profiles, workspaces: workspaces}
+	return &DBLoader{
+		db: db, profiles: profiles, workspaces: workspaces, promptName: promptName,
+	}
 }
 
 // Load 读取会话、模型配置、工作区与消息历史，并绑定本次 run 的记账端口。
@@ -94,17 +113,27 @@ func (l *DBLoader) loadHistory(
 		return nil, fmt.Errorf("load history: %w", err)
 	}
 	history := make([]*schema.Message, emptyHistory, len(past)+2)
-	history = append(history, schema.SystemMessage(systemPrompt(dir)))
+	prompt, err := renderSystemPrompt(l.promptName, dir)
+	if err != nil {
+		return nil, err
+	}
+	history = append(history, schema.SystemMessage(prompt))
 	for _, message := range past {
 		history = append(history, displayMessage(message))
 	}
 	return append(history, schema.UserMessage(current.Content)), nil
 }
 
-func systemPrompt(dir string) string {
-	return "你是 Euler 本地编码助手。工作区绝对路径：" + dir + "。" +
-		"文件工具只能访问该工作区内的路径。写入、补丁、删除文件和执行 shell 命令都需要用户审批。" +
-		"回答保持简洁。"
+// renderSystemPrompt 按名称加载模板并注入工作区路径。
+func renderSystemPrompt(name, dir string) (string, error) {
+	if name == "" {
+		name = defaultPromptTemplate
+	}
+	data, err := promptFS.ReadFile("prompts/" + name + ".md")
+	if err != nil {
+		return "", fmt.Errorf("load prompt template %q: %w", name, err)
+	}
+	return strings.ReplaceAll(string(data), promptPlaceholder, dir), nil
 }
 
 func displayMessage(message persistence.Message) *schema.Message {
