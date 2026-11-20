@@ -49,7 +49,14 @@ func TestFileListAndSearchReturnJSON(t *testing.T) {
 	listed, err := invokeTool(t, built, "file_list", `{}`)
 	require.NoError(t, err)
 	require.Contains(t, listed, `"a.txt"`)
-	require.Contains(t, listed, `"sub/b.txt"`)
+	require.Contains(t, listed, `"sub"`)
+	// 默认只列根目录一层，不展开子目录内容
+	require.NotContains(t, listed, `"sub/b.txt"`)
+
+	nested, err := invokeTool(t, built, "file_list", `{"path":"sub"}`)
+	require.NoError(t, err)
+	require.Contains(t, nested, `"sub/b.txt"`)
+
 	found, err := invokeTool(t, built, "file_search", `{"query":"b.txt"}`)
 	require.NoError(t, err)
 	var body map[string]any

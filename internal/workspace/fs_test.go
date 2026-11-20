@@ -107,6 +107,61 @@ func TestFileStoreListCapsNodes(t *testing.T) {
 	require.Len(t, nodes, maxListNodes)
 }
 
+func TestFileStoreListDirShallow(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, "alpha"), 0o700))
+	require.NoError(t, os.Mkdir(filepath.Join(root, "alpha", "beta"), 0o700))
+	writeTestFile(t, filepath.Join(root, "alpha", "one.txt"), "one")
+	writeTestFile(t, filepath.Join(root, "alpha", "beta", "two.txt"), "two")
+	writeTestFile(t, filepath.Join(root, "top.txt"), "hi")
+	store := NewFileStore(root, 64*1024)
+
+	nodes, err := store.ListDir(context.Background(), "")
+	require.NoError(t, err)
+	require.Equal(t, []string{"alpha", "top.txt"}, nodePaths(nodes))
+	require.Equal(t, typeDir, nodes[0].Type)
+	require.Equal(t, typeFile, nodes[1].Type)
+	require.Equal(t, int64(len("hi")), nodes[1].Size)
+
+	inner, err := store.ListDir(context.Background(), "alpha")
+	require.NoError(t, err)
+	require.Equal(t, []string{"alpha/beta", "alpha/one.txt"}, nodePaths(inner))
+}
+
+func TestFileStoreListDirRejectsEscapeAndFiles(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "a.txt"), "x")
+	store := NewFileStore(root, 64*1024)
+
+	_, err := store.ListDir(context.Background(), "../outside")
+	require.ErrorIs(t, err, ErrOutsideWorkspace)
+
+	_, err = store.ListDir(context.Background(), "a.txt")
+	require.ErrorIs(t, err, ErrNotDirectory)
+
+	_, err = store.ListDir(context.Background(), "missing")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestFileStoreListDirCapsEntries(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < maxListNodes+5; i++ {
+		writeTestFile(t, filepath.Join(root, strings.ToLower(padNumber(i))+".txt"), "x")
+	}
+	store := NewFileStore(root, 64*1024)
+	nodes, err := store.ListDir(context.Background(), ".")
+	require.NoError(t, err)
+	require.Len(t, nodes, maxListNodes)
+}
+
+func nodePaths(nodes []FileNode) []string {
+	paths := make([]string, emptyCapacity, len(nodes))
+	for _, node := range nodes {
+		paths = append(paths, node.Path)
+	}
+	return paths
+}
+
 func TestFileStoreSearchSortedAndCapped(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(root, "notes"), 0o700))

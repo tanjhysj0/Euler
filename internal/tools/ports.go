@@ -33,7 +33,7 @@ type CallRecorder interface {
 // 测试可以用内存实现替代。
 type FileStore interface {
 	Read(ctx context.Context, path string) ([]byte, error)
-	List(ctx context.Context) ([]workspace.FileNode, error)
+	ListDir(ctx context.Context, dir string) ([]workspace.FileNode, error)
 	Search(ctx context.Context, query string) ([]string, error)
 	PrepareWrite(ctx context.Context, path string, content []byte) (workspace.FileChange, error)
 	PreparePatch(

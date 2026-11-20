@@ -34,6 +34,8 @@ var (
 	ErrTooLarge = errors.New("file exceeds the read limit")
 	// ErrNotRegularFile 标记目录及其他非普通文件的目标。
 	ErrNotRegularFile = errors.New("workspace path is not a regular file")
+	// ErrNotDirectory 标记目标不是目录。
+	ErrNotDirectory = errors.New("workspace path is not a directory")
 )
 
 // FileNode 是工作区文件树中的一个条目。
@@ -102,6 +104,73 @@ func (s *FileStore) List(_ context.Context) ([]FileNode, error) {
 	}
 	slices.SortFunc(nodes, func(a, b FileNode) int { return strings.Compare(a.Path, b.Path) })
 	return nodes, nil
+}
+
+// ListDir 返回工作区内 dir 的直接子项，不做递归；dir 为空或 "." 时
+// 列出工作区根目录。符号链接会被列出，但绝不跟进其目标。
+func (s *FileStore) ListDir(_ context.Context, dir string) ([]FileNode, error) {
+	resolved, err := s.resolveDirectory(dir)
+	if err != nil {
+		return nil, err
+	}
+	return s.readDirNodes(resolved)
+}
+
+// resolveDirectory 解析 dir，并要求其存在且是目录。
+func (s *FileStore) resolveDirectory(dir string) (string, error) {
+	requested := dir
+	if requested == emptyPath {
+		requested = "."
+	}
+	joined, err := s.resolve(requested)
+	if err != nil {
+		return emptyPath, err
+	}
+	resolved, err := s.resolveExisting(joined)
+	if err != nil {
+		return emptyPath, err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return emptyPath, mapResolveError(err)
+	}
+	if !info.IsDir() {
+		return emptyPath, ErrNotDirectory
+	}
+	return resolved, nil
+}
+
+// readDirNodes 读取目录的直接子项并转换为工作区相对路径节点。
+func (s *FileStore) readDirNodes(dir string) ([]FileNode, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, mapResolveError(err)
+	}
+	capacity := len(entries)
+	if capacity > maxListNodes {
+		capacity = maxListNodes
+	}
+	nodes := make([]FileNode, emptyCapacity, capacity)
+	for _, entry := range entries {
+		if len(nodes) >= maxListNodes {
+			break
+		}
+		node, nodeErr := s.dirNode(dir, entry)
+		if nodeErr != nil {
+			return nil, nodeErr
+		}
+		nodes = append(nodes, node)
+	}
+	return nodes, nil
+}
+
+// dirNode 以工作区根为基准构建子项节点，使返回路径可直接用于其他工具。
+func (s *FileStore) dirNode(dir string, entry fs.DirEntry) (FileNode, error) {
+	rel, err := filepath.Rel(s.inside, filepath.Join(dir, entry.Name()))
+	if err != nil {
+		return FileNode{}, fmt.Errorf("resolve workspace entry: %w", err)
+	}
+	return newFileNode(rel, entry)
 }
 
 // Search 返回最多 maxSearchResults 个包含 query 的相对路径。

@@ -127,7 +127,7 @@ func (f *unitFiles) Read(_ context.Context, path string) ([]byte, error) {
 	return data, nil
 }
 
-func (*unitFiles) List(context.Context) ([]workspace.FileNode, error) { return nil, nil }
+func (*unitFiles) ListDir(context.Context, string) ([]workspace.FileNode, error) { return nil, nil }
 
 func (*unitFiles) Search(context.Context, string) ([]string, error) { return nil, nil }
 

@@ -15,7 +15,9 @@ type fileReadInput struct {
 
 const emptyPath = ""
 
-type fileListInput struct{}
+type fileListInput struct {
+	Path string `json:"path" jsonschema:"description=要列出的目录，相对工作区根；省略则列出根目录"`
+}
 
 type fileSearchInput struct {
 	Query string `json:"query" jsonschema:"description=搜索关键词"`
@@ -49,7 +51,7 @@ func (r *Registry) fileTools(files FileStore) ([]tool.BaseTool, error) {
 			return registerTool(r, "file_read", "读取工作区内文件内容", set.read)
 		},
 		func() (tool.BaseTool, error) {
-			return registerTool(r, "file_list", "列出工作区内的文件与目录", set.list)
+			return registerTool(r, "file_list", "列出工作区内某个目录的直接子项", set.list)
 		},
 		func() (tool.BaseTool, error) {
 			return registerTool(r, "file_search", "按文件名或内容搜索工作区", set.search)
@@ -85,10 +87,10 @@ func (s fileToolset) read(ctx context.Context, input fileReadInput) (toolOutcome
 	}), nil
 }
 
-func (s fileToolset) list(ctx context.Context, _ fileListInput) (toolOutcome, error) {
-	nodes, err := s.files.List(ctx)
+func (s fileToolset) list(ctx context.Context, input fileListInput) (toolOutcome, error) {
+	nodes, err := s.files.ListDir(ctx, input.Path)
 	if err != nil {
-		return failedOutcome(fileFailure(err, emptyPath)), nil
+		return failedOutcome(fileFailure(err, input.Path)), nil
 	}
 	entries := make([]map[string]any, emptyCapacity, len(nodes))
 	for _, node := range nodes {
@@ -163,6 +165,8 @@ func fileFailure(err error, path string) map[string]any {
 		code, message = "file_too_large", "文件过大"
 	case errors.Is(err, workspace.ErrNotRegularFile):
 		code, message = "not_regular_file", "不是普通文件"
+	case errors.Is(err, workspace.ErrNotDirectory):
+		code, message = "not_directory", "不是目录："+path
 	case errors.Is(err, workspace.ErrPatchAmbiguous):
 		code, message = "patch_ambiguous", "待替换文本不唯一或不存在"
 	case errors.Is(err, workspace.ErrNotDeletable):
