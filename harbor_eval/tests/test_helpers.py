@@ -54,7 +54,7 @@ def test_prepare_workspace_rejects_non_fixed_path_before_rm(tmp_path, workspace)
         check=False,
         env={
             **os.environ,
-            "EULER_HARBOR_WORKSPACE": workspace,
+            "EULER_HARBOR_WORKSPACES": workspace,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "WORKSPACE_COMMAND_LOG": str(call_log),
         },

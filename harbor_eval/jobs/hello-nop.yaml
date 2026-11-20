@@ -9,5 +9,5 @@ environment:
   type: docker
   mounts:
     - type: bind
-      source: /tmp/euler-harbor/workspace
-      target: /mnt/euler-workspace
+      source: /tmp/euler-harbor/workspaces
+      target: /mnt/euler-workspaces

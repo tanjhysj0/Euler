@@ -6,7 +6,7 @@ import pytest
 
 from agents.euler_agent import (
     APPROVAL_REASON,
-    DEFAULT_WORKSPACE,
+    DEFAULT_WORKSPACES_ROOT,
     EulerAgent,
     validate_host_workspace,
     validate_workdir,
@@ -100,7 +100,10 @@ class CancelledStreamClient(FakeRunClient):
 
 
 def make_agent(tmp_path) -> EulerAgent:
-    return EulerAgent(logs_dir=tmp_path)
+    agent = EulerAgent(logs_dir=tmp_path)
+    # 每个 trial 独占测试临时目录下的工作区子目录
+    agent.workspaces_root = str(tmp_path / "workspaces")
+    return agent
 
 
 def test_consume_returns_after_terminal_event(tmp_path, monkeypatch):
@@ -177,9 +180,7 @@ def test_validate_workdir_rejects_dangerous_paths():
         "/",
         "//",
         "/opt",
-        "/opt/baseline",
         "relative/path",
-        "/opt/../opt/baseline",
     ):
         with pytest.raises(ValueError):
             validate_workdir(path)
@@ -191,13 +192,17 @@ def test_validate_workdir_normalizes_container_path():
 
 def test_seed_workspace_clears_copies_and_chmods_quoted_workdir(tmp_path):
     environment = FakeEnvironment()
+    target = "/mnt/euler-workspaces/trial-1"
 
-    asyncio.run(make_agent(tmp_path)._seed_workspace(environment, "/app dir"))
+    asyncio.run(
+        make_agent(tmp_path)._seed_workspace(environment, "/app dir", target)
+    )
 
     assert environment.commands == [
-        "rm -rf '/app dir'/* '/app dir'/.[!.]* 2>/dev/null || true",
-        "cp -a /opt/baseline/. '/app dir'/",
-        "chmod -R a+rwX '/app dir'",
+        f"mkdir -p {target}",
+        f"rm -rf {target}/* {target}/.[!.]* 2>/dev/null || true",
+        f"cp -a '/app dir'/. {target}/",
+        f"chmod -R a+rwX {target}",
     ]
 
 
@@ -216,14 +221,22 @@ def test_seed_workspace_propagates_chmod_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(environment, "exec", fail_chmod)
 
     with pytest.raises(RuntimeError, match="permission denied"):
-        asyncio.run(make_agent(tmp_path)._seed_workspace(environment, "/app"))
+        asyncio.run(
+            make_agent(tmp_path)._seed_workspace(
+                environment, "/app", "/mnt/euler-workspaces/trial-1"
+            )
+        )
 
 
 def test_seed_workspace_rejects_dangerous_workdir(tmp_path):
     environment = FakeEnvironment()
 
     with pytest.raises(ValueError):
-        asyncio.run(make_agent(tmp_path)._seed_workspace(environment, "/opt"))
+        asyncio.run(
+            make_agent(tmp_path)._seed_workspace(
+                environment, "/opt", "/mnt/euler-workspaces/trial-1"
+            )
+        )
 
     assert environment.commands == []
 
@@ -262,7 +275,6 @@ def test_run_marks_no_action_when_run_does_nothing(tmp_path, monkeypatch):
         "agents.euler_agent.workspace_changed", lambda workspace: False
     )
     agent = make_agent(tmp_path)
-    agent.workspace = DEFAULT_WORKSPACE
     context = SimpleNamespace(metadata=None)
 
     asyncio.run(agent.run("fix", FakeEnvironment(), context))
@@ -281,7 +293,6 @@ def test_run_marks_completed_when_workspace_changed_without_tools(
         "agents.euler_agent.workspace_changed", lambda workspace: True
     )
     agent = make_agent(tmp_path)
-    agent.workspace = DEFAULT_WORKSPACE
     context = SimpleNamespace(metadata=None)
 
     asyncio.run(agent.run("fix", FakeEnvironment(), context))
@@ -302,7 +313,6 @@ def test_run_marks_completed_when_tools_were_used(tmp_path, monkeypatch):
         "agents.euler_agent.workspace_changed", lambda workspace: False
     )
     agent = make_agent(tmp_path)
-    agent.workspace = DEFAULT_WORKSPACE
     context = SimpleNamespace(metadata=None)
 
     asyncio.run(agent.run("fix", FakeEnvironment(), context))
@@ -330,7 +340,6 @@ def test_run_records_failed_outcome_before_raising(tmp_path, monkeypatch):
         "agents.euler_agent.workspace_changed", lambda workspace: False
     )
     agent = make_agent(tmp_path)
-    agent.workspace = DEFAULT_WORKSPACE
     context = SimpleNamespace(metadata=None)
 
     with pytest.raises(RuntimeError):
@@ -358,7 +367,6 @@ def test_run_treats_round_limit_with_output_as_delivered(tmp_path, monkeypatch):
         "agents.euler_agent.workspace_changed", lambda workspace: True
     )
     agent = make_agent(tmp_path)
-    agent.workspace = DEFAULT_WORKSPACE
     context = SimpleNamespace(metadata=None)
 
     asyncio.run(agent.run("fix", FakeEnvironment(), context))
@@ -380,7 +388,6 @@ def test_run_writes_trace_artifact(tmp_path, monkeypatch):
         "agents.euler_agent.workspace_changed", lambda workspace: True
     )
     agent = make_agent(tmp_path)
-    agent.workspace = DEFAULT_WORKSPACE
     context = SimpleNamespace(metadata=None)
 
     asyncio.run(agent.run("fix", FakeEnvironment(), context))
@@ -404,7 +411,6 @@ def test_run_records_model_and_declared_budget(tmp_path, monkeypatch):
         "agents.euler_agent.workspace_changed", lambda workspace: True
     )
     agent = make_agent(tmp_path)
-    agent.workspace = DEFAULT_WORKSPACE
     context = SimpleNamespace(metadata=None)
 
     asyncio.run(agent.run("fix", FakeEnvironment(), context))
@@ -426,6 +432,8 @@ def test_validate_host_workspace_rejects_unsafe_paths():
         "/Users/jason/go/src/Euler",
         "/tmp//",
         "/tmp/euler-harbor",
+        "/tmp/euler-harbor/workspaces",
+        "/tmp/euler-harbor/workspace",
         "/tmp/euler-harbor/other",
         "/tmp/euler-harbor/../etc",
     ):
@@ -433,16 +441,19 @@ def test_validate_host_workspace_rejects_unsafe_paths():
             validate_host_workspace(path)
 
 
-def test_validate_host_workspace_accepts_fixed_path_with_trailing_slash():
+def test_validate_host_workspace_accepts_trial_subdir_with_trailing_slash():
     assert (
-        validate_host_workspace("/tmp/euler-harbor/workspace/")
-        == "/tmp/euler-harbor/workspace"
+        validate_host_workspace("/tmp/euler-harbor/workspaces/trial-1/")
+        == "/tmp/euler-harbor/workspaces/trial-1"
+    )
+    assert (
+        DEFAULT_WORKSPACES_ROOT == "/tmp/euler-harbor/workspaces"
     )
 
 
 def test_run_rejects_host_workspace_before_session(tmp_path, monkeypatch):
     agent = make_agent(tmp_path)
-    agent.workspace = "/Users/jason/go/src/Euler"
+    agent.workspaces_root = ""
 
     def fail(base_url):
         raise AssertionError("非法工作区不应创建 client")

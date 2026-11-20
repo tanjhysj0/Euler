@@ -4,7 +4,7 @@ repo_root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$repo_root"
 export PYTHONPATH="$repo_root/harbor_eval${PYTHONPATH:+:$PYTHONPATH}"
 export EULER_BASE_URL="${EULER_BASE_URL:-http://127.0.0.1:8080}"
-export EULER_HARBOR_WORKSPACE="${EULER_HARBOR_WORKSPACE:-/tmp/euler-harbor/workspace}"
+export EULER_HARBOR_WORKSPACES="${EULER_HARBOR_WORKSPACES:-/tmp/euler-harbor/workspaces}"
 # 默认使用 flash 模型与 high 推理强度；调用方可用同名环境变量覆盖
 # deepseek-v4-flash 是可用别名，服务端会归一化为 deepseek-flash
 export EULER_MODEL_BASE_URL="${EULER_MODEL_BASE_URL:-https://api.deepseek.com}"

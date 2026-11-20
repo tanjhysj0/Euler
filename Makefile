@@ -11,6 +11,8 @@ EULER_REASONING_EFFORT ?= high
 # harbor-test 默认覆盖的编码数据集；可用命令行或环境变量覆盖。
 HARBOR_DATASETS ?= programbench devopsgym tb3-preview-v2 terminal-bench-3-test swe-gen-js swe-marathon android-bench swe-gen-rust LiteCoder-rl swe-gen-cpp swe-gen-java mimo-v26-code swe-gen-go aider-polyglot algotune mimo-v26-terminal humanevalfix bigcodebench-hard-complete tb21-code-debug binary-audit
 HARBOR_PER_DATASET ?= 1
+# 并发 trial 数；每个 trial 使用独立工作区子目录，因此可以并行。
+HARBOR_CONCURRENCY ?= 1
 
 build:
 	npm --prefix web ci && npm --prefix web run build
@@ -97,7 +99,7 @@ harbor-test:
 			{ \
 				echo "job_name: $$job_name"; \
 				echo "jobs_dir: harbor_eval/results"; \
-				echo "n_concurrent_trials: 1"; \
+				echo "n_concurrent_trials: $(HARBOR_CONCURRENCY)"; \
 				echo "datasets:"; \
 				for ds in $(HARBOR_DATASETS); do \
 					echo "  - path: harbor_eval/tasks/_downloads/$$ds"; \
@@ -109,10 +111,10 @@ harbor-test:
 				echo "  type: docker"; \
 				echo "  mounts:"; \
 				echo "    - type: bind"; \
-				echo "      source: /tmp/euler-harbor/workspace"; \
-				echo "      target: /mnt/euler-workspace"; \
+				echo "      source: /tmp/euler-harbor/workspaces"; \
+				echo "      target: /mnt/euler-workspaces"; \
 			} > "$$cfg"; \
-			echo "  数据集: $$(echo $(HARBOR_DATASETS) | wc -w | tr -d ' ') 个，每个 $(HARBOR_PER_DATASET) 个任务"; \
+			echo "  数据集: $$(echo $(HARBOR_DATASETS) | wc -w | tr -d ' ') 个，每个 $(HARBOR_PER_DATASET) 个任务，并发 $(HARBOR_CONCURRENCY)"; \
 			PYTHONPATH="$$PWD/harbor_eval$${PYTHONPATH:+:$$PYTHONPATH}" \
 				harbor run -c "$$cfg" -y --job-name "$$job_name" -o "$$results_dir"; \
 			job_dir="$$results_dir/$$job_name"; \

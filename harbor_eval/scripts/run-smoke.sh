@@ -4,7 +4,7 @@ repo_root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$repo_root"
 export PYTHONPATH="$repo_root/harbor_eval${PYTHONPATH:+:$PYTHONPATH}"
 export EULER_BASE_URL="${EULER_BASE_URL:-http://127.0.0.1:8080}"
-export EULER_HARBOR_WORKSPACE="${EULER_HARBOR_WORKSPACE:-/tmp/euler-harbor/workspace}"
+export EULER_HARBOR_WORKSPACES="${EULER_HARBOR_WORKSPACES:-/tmp/euler-harbor/workspaces}"
 
 # 每次运行使用唯一标识，避免 Harbor 复用历史 trial 打印过期 reward
 run_id=$(date +%Y%m%d-%H%M%S)

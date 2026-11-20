@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import posixpath
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -18,10 +20,11 @@ from harbor.models.agent.context import AgentContext
 from agents.euler_client import TERMINAL_EVENTS, EulerClient
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8080"
-DEFAULT_WORKSPACE = "/tmp/euler-harbor/workspace"
-# 宿主机工作区在容器内的挂载点。刻意不使用 /app：任务镜像的原始文件通常
+# 宿主机工作区根目录；每个 trial 在下面使用独立子目录，支持并发互不干扰。
+DEFAULT_WORKSPACES_ROOT = "/tmp/euler-harbor/workspaces"
+# 宿主机根目录在容器内的挂载点。刻意不使用 /app：任务镜像的原始文件通常
 # 位于 /app，若把宿主机目录挂到 /app 会覆盖它们，导致无法播种工作区。
-DEFAULT_HOST_MOUNT = "/mnt/euler-workspace"
+DEFAULT_HOST_MOUNTS_ROOT = "/mnt/euler-workspaces"
 APPROVAL_REASON = "euler-harbor"
 MAX_RECONNECTS = 3
 RECONNECT_DELAY_SECONDS = 1.0
@@ -71,15 +74,26 @@ def validate_mount(path: str) -> str:
     return normalized
 
 
-def validate_host_workspace(path: str) -> str:
-    """校验宿主机共享工作区，避免 git、会话与删除操作落到任意目录。"""
+def validate_host_root(root: str) -> str:
+    """校验宿主机工作区根目录，拒绝空值、相对路径与危险根路径。"""
+    if not root or not root.startswith("/"):
+        raise ValueError(f"invalid host workspaces root: {root!r}")
+    normalized = posixpath.normpath(root)
+    if normalized in DANGEROUS_WORKDIRS or not normalized.strip("/"):
+        raise ValueError(f"refusing dangerous host workspaces root: {normalized!r}")
+    return normalized
+
+
+def validate_host_workspace(
+    path: str, root: str = DEFAULT_WORKSPACES_ROOT
+) -> str:
+    """校验宿主机工作区必须是根目录下的具体子目录，避免误用共享根。"""
     if not path or not path.startswith("/"):
         raise ValueError(f"invalid host workspace: {path!r}")
     normalized = posixpath.normpath(path)
-    if normalized != DEFAULT_WORKSPACE:
-        raise ValueError(
-            f"host workspace must be {DEFAULT_WORKSPACE}: {normalized!r}"
-        )
+    base = validate_host_root(root)
+    if not normalized.startswith(base + "/"):
+        raise ValueError(f"host workspace must be under {base}: {normalized!r}")
     return normalized
 
 
@@ -135,8 +149,12 @@ class EulerAgent(BaseAgent):
     def __init__(self, logs_dir: Path, model_name: str | None = None, **kwargs):
         super().__init__(logs_dir=logs_dir, model_name=model_name, **kwargs)
         self.base_url = os.environ.get("EULER_BASE_URL", DEFAULT_BASE_URL)
-        self.workspace = os.environ.get("EULER_HARBOR_WORKSPACE", DEFAULT_WORKSPACE)
-        self.host_mount = os.environ.get("EULER_HOST_MOUNT", DEFAULT_HOST_MOUNT)
+        self.workspaces_root = os.environ.get(
+            "EULER_HARBOR_WORKSPACES", DEFAULT_WORKSPACES_ROOT
+        )
+        self.host_mounts_root = os.environ.get(
+            "EULER_HOST_MOUNTS", DEFAULT_HOST_MOUNTS_ROOT
+        )
         self.profile_id = os.environ.get("EULER_PROFILE_ID") or None
         self.model_base_url = os.environ.get("EULER_MODEL_BASE_URL") or None
         self.model = os.environ.get("EULER_MODEL") or None
@@ -158,16 +176,40 @@ class EulerAgent(BaseAgent):
         finally:
             await client.aclose()
 
+    def _trial_key(self) -> str:
+        """用 trial 日志目录生成稳定的唯一子目录名，供并发隔离使用。"""
+        raw = str(self.logs_dir.resolve())
+        digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+        name = re.sub(r"[^A-Za-z0-9._-]+", "-", self.logs_dir.name or "trial")
+        return f"{name}-{digest}"
+
+    def _workspace_for_trial(self) -> str:
+        """返回并创建本 trial 独占的宿主机工作区。"""
+        root = validate_host_root(self.workspaces_root)
+        workspace = validate_host_workspace(
+            posixpath.join(root, self._trial_key()), root
+        )
+        os.makedirs(workspace, exist_ok=True)
+        os.chmod(workspace, 0o777)
+        return workspace
+
+    def _mount_for_trial(self) -> str:
+        """返回本 trial 在容器内对应的挂载点。"""
+        return validate_mount(
+            posixpath.join(self.host_mounts_root, self._trial_key())
+        )
+
     async def run(
         self,
         instruction: str,
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
-        # 必须最先校验宿主机工作区，非法路径直接失败且不创建会话
-        workspace = validate_host_workspace(self.workspace)
+        # 先计算并校验 trial 独占工作区，非法路径直接失败且不创建会话
+        workspace = self._workspace_for_trial()
+        mount = self._mount_for_trial()
         workdir = await self._workdir(environment)
-        await self._seed_workspace(environment, workdir)
+        await self._seed_workspace(environment, workdir, mount)
         git_baseline(workspace)
         full_instruction = build_instruction(instruction, workspace, workdir)
 
@@ -293,12 +335,12 @@ class EulerAgent(BaseAgent):
         return (result.stdout or "").strip()
 
     async def _seed_workspace(
-        self, environment: BaseEnvironment, workdir: str
+        self, environment: BaseEnvironment, workdir: str, mount: str
     ) -> None:
         # 任务原始文件仍在镜像的 workdir 中（挂载点已移到独立目录），
-        # 因此直接从 workdir 复制到宿主机挂载点，无需任务镜像预置基线副本。
+        # 因此直接从 workdir 复制到本 trial 的挂载点。
         source = validate_workdir(workdir)
-        target = validate_mount(self.host_mount)
+        target = validate_mount(mount)
         if source == target:
             raise ValueError("host mount must differ from task workdir")
         quoted_source = shlex.quote(source)
