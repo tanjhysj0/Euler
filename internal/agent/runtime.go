@@ -18,6 +18,7 @@ import (
 	"euler/internal/event"
 	"euler/internal/run"
 	"euler/internal/tools"
+	"euler/internal/tracing"
 )
 
 // ErrMissingLoader 表示 Runtime 没有配置输入装载器。
@@ -59,6 +60,22 @@ type InputLoader interface {
 	Load(ctx context.Context, request run.Request) (RunInput, error)
 }
 
+// RunTracer 为单次 run 提供链路追踪；Deps.Tracer 为 nil 时关闭追踪。
+// trace 的根观测通常由 run 层建立，本层只负责标注、子观测与输出。
+type RunTracer interface {
+	StartRun(ctx context.Context, meta tracing.TraceMeta) context.Context
+	// AnnotateRun 在输入装载完成后补齐输入、模型与工作区等检索维度。
+	AnnotateRun(ctx context.Context, meta tracing.TraceMeta)
+	// SetOutput 写入最终助手输出。
+	SetOutput(ctx context.Context, output string)
+	// StartSpan 在当前 trace 下创建普通子观测，返回收尾函数。
+	StartSpan(ctx context.Context, name string) (context.Context, func(error))
+	// RunActive 报告 ctx 中是否已有活跃的 run 级 trace。
+	RunActive(ctx context.Context) bool
+	// FinishRun 结束根观测；errMsg 非空时标记失败。
+	FinishRun(ctx context.Context, errMsg string)
+}
+
 // Deps 携带单次 run 所需的全部依赖；每次 Run 都会构建全新的工具闭包，
 // 避免工作区或审批状态在 run 之间泄漏。
 type Deps struct {
@@ -66,6 +83,7 @@ type Deps struct {
 	Events               event.Publisher
 	Gate                 approval.Gate
 	Factory              ChatModelFactory
+	Tracer               RunTracer
 	Limits               config.AgentLimits
 	ShellTimeout         time.Duration
 	ShellOutputBytes     int
@@ -93,32 +111,143 @@ func NewRuntime(deps Deps) *Runtime {
 }
 
 const (
-	messageCompleted = "completed"
-	maxStepHeadroom  = 10
-	noToolCalls      = 0
+	messageCompleted  = "completed"
+	maxStepHeadroom   = 10
+	noToolCalls       = 0
+	lastMessageOffset = 1
+
+	// spanLoadRunInput 与 spanBuildAgent 是 run 启动阶段的两个子观测名。
+	spanLoadRunInput = "load-run-input"
+	spanBuildAgent   = "build-agent"
 )
 
-// Run 装载输入并执行一次 run。
+// Run 装载输入并执行一次 run。根 trace 通常已由 run 层建立；若直接调用
+// 本方法且没有活跃 trace，则自行建立一个并在结束时收尾。
 func (rt *Runtime) Run(ctx context.Context, request run.Request) error {
 	if rt.deps.Loader == nil {
 		return ErrMissingLoader
 	}
-	input, err := rt.deps.Loader.Load(ctx, request)
+	ctx, ownsTrace := rt.resumeTrace(ctx, request)
+	input, err := rt.loadInput(ctx, request)
 	if err != nil {
+		if ownsTrace {
+			rt.finishTrace(ctx, err)
+		}
 		return err
 	}
-	return rt.RunInput(ctx, input)
+	rt.annotateTrace(ctx, input)
+	writer := newDeltaWriter(rt.deps.Events, input.Request, input.Messages, input.Model.APIKey)
+	err = rt.execute(ctx, input, writer)
+	rt.writeOutput(ctx, writer.text())
+	if ownsTrace {
+		rt.finishTrace(ctx, err)
+	}
+	return err
 }
 
 // RunInput 在已装载的输入上驱动模型/工具循环，过程中将助手增量内容
 // 流式写入消息记录和事件。
 func (rt *Runtime) RunInput(ctx context.Context, input RunInput) error {
 	writer := newDeltaWriter(rt.deps.Events, input.Request, input.Messages, input.Model.APIKey)
-	reactAgent, err := rt.buildAgent(ctx, input, writer)
+	ctx, ownsTrace := rt.resumeTrace(ctx, input.Request)
+	rt.annotateTrace(ctx, input)
+	err := rt.execute(ctx, input, writer)
+	rt.writeOutput(ctx, writer.text())
+	if ownsTrace {
+		rt.finishTrace(ctx, err)
+	}
+	return err
+}
+
+// execute 构建 ReAct agent 并驱动一次完整的模型/工具循环。
+func (rt *Runtime) execute(ctx context.Context, input RunInput, writer *deltaWriter) error {
+	buildCtx, endBuild := rt.startSpan(ctx, spanBuildAgent)
+	reactAgent, err := rt.buildAgent(buildCtx, input, writer)
+	endBuild(err)
 	if err != nil {
 		return err
 	}
 	return rt.stream(ctx, reactAgent, input.History, writer)
+}
+
+// loadInput 在子观测中装载输入，使数据库与工作区解析失败可被定位。
+func (rt *Runtime) loadInput(ctx context.Context, request run.Request) (RunInput, error) {
+	loadCtx, end := rt.startSpan(ctx, spanLoadRunInput)
+	input, err := rt.deps.Loader.Load(loadCtx, request)
+	end(err)
+	return input, err
+}
+
+// resumeTrace 在 ctx 中还没有活跃 trace 时自行建立一个根观测，
+// 并返回是否由本层负责收尾，避免与 run 层重复创建。
+func (rt *Runtime) resumeTrace(
+	ctx context.Context, request run.Request,
+) (context.Context, bool) {
+	if rt.deps.Tracer == nil || rt.deps.Tracer.RunActive(ctx) {
+		return ctx, false
+	}
+	return rt.deps.Tracer.StartRun(ctx, tracing.TraceMeta{
+		RunID: request.RunID, SessionID: request.SessionID,
+	}), true
+}
+
+// annotateTrace 在装载完成后补齐根观测的输入、模型与工作区。
+func (rt *Runtime) annotateTrace(ctx context.Context, input RunInput) {
+	if rt.deps.Tracer != nil {
+		rt.deps.Tracer.AnnotateRun(ctx, traceMeta(input))
+	}
+}
+
+// writeOutput 把最终助手输出写入 trace，供收尾方保留完整结果。
+func (rt *Runtime) writeOutput(ctx context.Context, output string) {
+	if rt.deps.Tracer != nil {
+		rt.deps.Tracer.SetOutput(ctx, output)
+	}
+}
+
+// finishTrace 结束由本层建立的根观测。
+func (rt *Runtime) finishTrace(ctx context.Context, err error) {
+	if rt.deps.Tracer != nil {
+		rt.deps.Tracer.FinishRun(ctx, errText(err))
+	}
+}
+
+// startSpan 在开启追踪时创建子观测，否则返回空收尾函数。
+func (rt *Runtime) startSpan(
+	ctx context.Context, name string,
+) (context.Context, func(error)) {
+	if rt.deps.Tracer == nil {
+		return ctx, func(error) {}
+	}
+	return rt.deps.Tracer.StartSpan(ctx, name)
+}
+
+// errText 返回可直接写入追踪错误信息的文本。
+func errText(err error) string {
+	if err == nil {
+		return emptyContent
+	}
+	return err.Error()
+}
+
+// traceMeta 汇总本次 run 的追踪属性：用户输入、模型与工作区。
+func traceMeta(input RunInput) tracing.TraceMeta {
+	return tracing.TraceMeta{
+		RunID:     input.Request.RunID,
+		SessionID: input.Request.SessionID,
+		Input:     lastUserContent(input.History),
+		Workspace: input.Dir,
+		Model:     input.Model.Model,
+		APIKey:    input.Model.APIKey,
+	}
+}
+
+// lastUserContent 返回历史中最后一条消息的内容，即本次 run 的用户输入。
+func lastUserContent(history []*schema.Message) string {
+	if len(history) == emptyHistory {
+		return emptyContent
+	}
+	return history[len(history)-lastMessageOffset].Content
 }
 
 // stream 并行消费最终输出与每轮的 future stream；任一方失败都会通过

@@ -23,6 +23,7 @@ const (
 	defaultShellOutput  = 1024 * 1024
 	defaultModelTimeout = 120 * time.Second
 	defaultPreview      = 1024 * 1024
+	defaultLangfuseEnv  = "local"
 	minAgentCount       = 1
 	minAgentDuration    = time.Nanosecond
 	minAgentOutput      = 1024
@@ -43,18 +44,31 @@ type AgentLimits struct {
 	MaxOutputBytes int           `yaml:"max_output_bytes"`
 }
 
-// Config 是完整的运行时配置。数据库 URL 只从环境变量读取，
+// LangfuseConfig 配置 Langfuse 链路追踪。三项参数都可以写进配置文件，
+// 也可以完全由环境变量提供；密钥不会随配置序列化落盘。
+type LangfuseConfig struct {
+	Host        string `yaml:"host"`
+	PublicKey   string `yaml:"public_key"`
+	SecretKey   string `yaml:"-"`
+	Environment string `yaml:"environment"`
+}
+
+// Enabled 报告是否配置了 Langfuse。
+func (l LangfuseConfig) Enabled() bool { return l.Host != emptyValue }
+
+// Config 是完整的运行时配置。数据库 URL 与 Langfuse 密钥只从环境变量读取，
 // 绝不会被序列化。
 type Config struct {
-	Listen           string        `yaml:"listen"`
-	WorkspaceRoot    string        `yaml:"workspace_root"`
-	AllowedOrigins   []string      `yaml:"allowed_origins"`
-	DatabaseURL      string        `yaml:"-"`
-	Agent            AgentLimits   `yaml:"agent"`
-	ShellTimeout     time.Duration `yaml:"shell_timeout"`
-	ShellOutputBytes int           `yaml:"shell_output_bytes"`
-	ShellPathPrefix  string        `yaml:"shell_path_prefix"`
-	ModelTimeout     time.Duration `yaml:"model_timeout"`
+	Listen           string         `yaml:"listen"`
+	WorkspaceRoot    string         `yaml:"workspace_root"`
+	AllowedOrigins   []string       `yaml:"allowed_origins"`
+	DatabaseURL      string         `yaml:"-"`
+	Langfuse         LangfuseConfig `yaml:"langfuse"`
+	Agent            AgentLimits    `yaml:"agent"`
+	ShellTimeout     time.Duration  `yaml:"shell_timeout"`
+	ShellOutputBytes int            `yaml:"shell_output_bytes"`
+	ShellPathPrefix  string         `yaml:"shell_path_prefix"`
+	ModelTimeout     time.Duration  `yaml:"model_timeout"`
 	// ModelReasoningEffort 为空时使用模型默认强度；可选 low/medium/high/max。
 	ModelReasoningEffort string `yaml:"model_reasoning_effort"`
 	// SystemPromptTemplate 选择 internal/agent/prompts/<name>.md 模板；
@@ -84,6 +98,7 @@ func Load(path string) (Config, error) {
 		ModelTimeout:         defaultModelTimeout,
 		SystemPromptTemplate: defaultPrompt,
 		PreviewBytes:         defaultPreview,
+		Langfuse:             LangfuseConfig{Environment: defaultLangfuseEnv},
 	}
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -98,6 +113,7 @@ func Load(path string) (Config, error) {
 	if cfg.DatabaseURL == emptyValue {
 		return Config{}, errors.New("EULER_DATABASE_URL is required")
 	}
+	cfg.loadLangfuseEnv()
 	if err = cfg.validate(); err != nil {
 		return Config{}, err
 	}
@@ -135,6 +151,44 @@ func (c Config) validateRuntime() error {
 	}
 	if !validPromptName(c.SystemPromptTemplate) {
 		return errors.New("system_prompt_template must match ^[a-z0-9_-]+$")
+	}
+	return c.Langfuse.validate()
+}
+
+// loadLangfuseEnv 用环境变量覆盖 Langfuse 配置，兼容 EULER_ 前缀与
+// Langfuse 官方 SDK 的标准变量名。
+func (c *Config) loadLangfuseEnv() {
+	c.Langfuse.Host = envOr(
+		c.Langfuse.Host, "EULER_LANGFUSE_HOST", "LANGFUSE_BASE_URL", "LANGFUSE_HOST",
+	)
+	c.Langfuse.PublicKey = envOr(
+		c.Langfuse.PublicKey, "EULER_LANGFUSE_PUBLIC_KEY", "LANGFUSE_PUBLIC_KEY",
+	)
+	c.Langfuse.SecretKey = envOr(
+		c.Langfuse.SecretKey, "EULER_LANGFUSE_SECRET_KEY", "LANGFUSE_SECRET_KEY",
+	)
+}
+
+// envOr 返回第一个非空环境变量的值；全部为空时返回 fallback。
+func envOr(fallback string, names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != emptyValue {
+			return value
+		}
+	}
+	return fallback
+}
+
+// validate 要求 Langfuse 的三项参数同时提供；全部为空表示关闭追踪。
+func (l LangfuseConfig) validate() error {
+	if l.Host == emptyValue && l.PublicKey == emptyValue && l.SecretKey == emptyValue {
+		return nil
+	}
+	if l.Host == emptyValue || l.PublicKey == emptyValue || l.SecretKey == emptyValue {
+		return errors.New("langfuse needs host, public_key and EULER_LANGFUSE_SECRET_KEY together")
+	}
+	if !strings.HasPrefix(l.Host, "http://") && !strings.HasPrefix(l.Host, "https://") {
+		return errors.New("langfuse host must start with http:// or https://")
 	}
 	return nil
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"euler/internal/logging"
+	"euler/internal/tracing"
 )
 
 // Limits 限制单个 run 的生命周期。
@@ -18,11 +19,19 @@ type Limits struct {
 	MaxDuration time.Duration
 }
 
+// Tracer 负责 run 级 trace 的建立与收尾。实现可为 nil，此时关闭追踪。
+type Tracer interface {
+	StartRun(ctx context.Context, meta tracing.TraceMeta) context.Context
+	StartSpan(ctx context.Context, name string) (context.Context, func(error))
+	FinishRun(ctx context.Context, errMsg string)
+}
+
 // Manager 负责 run worker、取消和优雅关闭。
 type Manager struct {
 	store  RunStore
 	runner Runner
 	limits Limits
+	tracer Tracer
 
 	mu      sync.Mutex
 	workers map[uuid.UUID]context.CancelFunc
@@ -32,20 +41,26 @@ type Manager struct {
 
 var errManagerClosing = errors.New("run manager is shutting down")
 
-const noDuration time.Duration = 0
+const (
+	noDuration time.Duration = 0
+	// spanMarkRunning 是 run 进入执行状态时写入数据库的子观测名。
+	spanMarkRunning = "mark-running"
+)
 
 // NewManager 构建一个通过 store 持久化的 Manager。run 由 runner 在 limits
-// 约束下执行。
-func NewManager(store RunStore, runner Runner, limits Limits) *Manager {
+// 约束下执行，tracer 为 nil 时关闭追踪。
+func NewManager(store RunStore, runner Runner, limits Limits, tracer Tracer) *Manager {
 	return &Manager{
 		store:   store,
 		runner:  runner,
 		limits:  limits,
+		tracer:  tracer,
 		workers: make(map[uuid.UUID]context.CancelFunc),
 	}
 }
 
 // Start 持久化一个新的 run 并在后台执行它。run 及其消息提交完成后即返回。
+// trace 在分发前建立，使排队与标记运行阶段都在同一条链路内。
 func (m *Manager) Start(
 	ctx context.Context, sessionID uuid.UUID, content string,
 ) (StartResult, error) {
@@ -61,8 +76,11 @@ func (m *Manager) Start(
 		SessionID:          sessionID,
 		WorkspaceID:        result.WorkspaceID,
 		AssistantMessageID: result.AssistantMessage.ID,
+		Input:              content,
 	}
+	ctx = m.startTrace(ctx, request)
 	if !m.dispatch(ctx, request) {
+		m.finishTrace(ctx, errManagerClosing)
 		return StartResult{}, errManagerClosing
 	}
 	return result, nil
@@ -124,21 +142,28 @@ func (m *Manager) execute(ctx context.Context, request Request) {
 		}
 	}()
 	dbCtx := context.WithoutCancel(ctx)
-	started, err := m.store.MarkRunning(dbCtx, request)
+	markCtx, endMark := m.startSpan(ctx, spanMarkRunning)
+	started, err := m.store.MarkRunning(context.WithoutCancel(markCtx), request)
+	endMark(err)
 	if err != nil {
 		slog.Error("mark run running", logKeyRunID, request.RunID,
 			logKeyError, logging.Redact(err.Error()))
 		m.failRun(dbCtx, request.RunID, logging.Redact(err.Error()))
+		m.finishTrace(ctx, err)
 		return
 	}
 	if !started {
+		m.finishTrace(ctx, nil)
 		return
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		m.finish(dbCtx, request, ctxErr)
+		m.finishTrace(ctx, ctxErr)
 		return
 	}
-	m.finish(dbCtx, request, m.runner.Run(ctx, request))
+	runErr := m.runner.Run(ctx, request)
+	m.finish(dbCtx, request, runErr)
+	m.finishTrace(ctx, runErr)
 }
 
 // handlePanic 将 worker 的 panic 记录为失败的 run；panic 值脱敏后写入
@@ -147,6 +172,39 @@ func (m *Manager) handlePanic(ctx context.Context, request Request, recovered an
 	detail := logging.Redact(fmt.Sprintf("%v", recovered))
 	slog.Error("run worker panic", logKeyRunID, request.RunID, logKeyError, detail)
 	m.failRun(context.WithoutCancel(ctx), request.RunID, detail)
+	m.finishTrace(ctx, errors.New(detail))
+}
+
+// startTrace 在 run 层建立根观测；未配置追踪时原样返回 ctx。
+func (m *Manager) startTrace(ctx context.Context, request Request) context.Context {
+	if m.tracer == nil {
+		return ctx
+	}
+	return m.tracer.StartRun(ctx, tracing.TraceMeta{
+		RunID: request.RunID, SessionID: request.SessionID, Input: request.Input,
+	})
+}
+
+// startSpan 在 run 层创建子观测；未配置追踪时返回空收尾函数。
+func (m *Manager) startSpan(
+	ctx context.Context, name string,
+) (context.Context, func(error)) {
+	if m.tracer == nil {
+		return ctx, func(error) {}
+	}
+	return m.tracer.StartSpan(ctx, name)
+}
+
+// finishTrace 结束 run 层建立的根观测。
+func (m *Manager) finishTrace(ctx context.Context, err error) {
+	if m.tracer == nil {
+		return
+	}
+	if err == nil {
+		m.tracer.FinishRun(ctx, emptyText)
+		return
+	}
+	m.tracer.FinishRun(ctx, err.Error())
 }
 
 func (m *Manager) finish(ctx context.Context, request Request, runErr error) {

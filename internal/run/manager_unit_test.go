@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"euler/internal/persistence"
+	"euler/internal/tracing"
 )
 
 // unitFakeStore 用内存实现 RunStore，使 Manager 的编排逻辑无需数据库即可测试。
@@ -115,7 +116,7 @@ func newUnitManager(
 	t *testing.T, store RunStore, runner Runner, maxDuration time.Duration,
 ) *Manager {
 	t.Helper()
-	manager := NewManager(store, runner, Limits{MaxDuration: maxDuration})
+	manager := NewManager(store, runner, Limits{MaxDuration: maxDuration}, nil)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -299,7 +300,9 @@ func TestManagerRecoversPanicWithoutDatabase(t *testing.T) {
 
 func TestManagerShutdownInterruptsActiveRun(t *testing.T) {
 	store := newUnitFakeStore()
-	manager := NewManager(store, &unitFakeRunner{block: true}, Limits{MaxDuration: time.Minute})
+	manager := NewManager(
+		store, &unitFakeRunner{block: true}, Limits{MaxDuration: time.Minute}, nil,
+	)
 	started, err := manager.Start(context.Background(), uuid.New(), "shutdown")
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -314,6 +317,71 @@ func TestManagerReturnsStartError(t *testing.T) {
 	manager := newUnitManager(t, store, &unitFakeRunner{}, time.Second)
 	_, err := manager.Start(context.Background(), uuid.New(), "conflict")
 	require.ErrorIs(t, err, ErrActiveRun)
+}
+
+// unitTracer 记录 Manager 发起的 trace 生命周期事件。
+type unitTracer struct {
+	mu       sync.Mutex
+	starts   []tracing.TraceMeta
+	spans    []string
+	finishes []string
+}
+
+func (t *unitTracer) StartRun(ctx context.Context, meta tracing.TraceMeta) context.Context {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.starts = append(t.starts, meta)
+	return ctx
+}
+
+func (t *unitTracer) StartSpan(
+	ctx context.Context, name string,
+) (context.Context, func(error)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.spans = append(t.spans, name)
+	return ctx, func(error) {}
+}
+
+func (t *unitTracer) FinishRun(_ context.Context, errMsg string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.finishes = append(t.finishes, errMsg)
+}
+
+func (t *unitTracer) snapshot() (
+	starts []tracing.TraceMeta, spans, finishes []string,
+) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]tracing.TraceMeta(nil), t.starts...),
+		append([]string(nil), t.spans...),
+		append([]string(nil), t.finishes...)
+}
+
+func TestManagerTracesRunLifecycle(t *testing.T) {
+	store := newUnitFakeStore()
+	tracer := &unitTracer{}
+	manager := NewManager(store, &unitFakeRunner{}, Limits{MaxDuration: time.Minute}, tracer)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, manager.Shutdown(ctx))
+	})
+	sessionID := uuid.New()
+	_, err := manager.Start(context.Background(), sessionID, "你好")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		_, _, finishes := tracer.snapshot()
+		return len(finishes) > noCapacity
+	}, time.Second, 10*time.Millisecond)
+
+	starts, spans, finishes := tracer.snapshot()
+	require.Len(t, starts, 1)
+	require.Equal(t, sessionID, starts[0].SessionID)
+	require.Equal(t, "你好", starts[0].Input)
+	require.Contains(t, spans, spanMarkRunning)
+	require.Equal(t, []string{emptyText}, finishes)
 }
 
 // 保证 fake 在编译期满足端口。

@@ -45,6 +45,11 @@ func newDeltaWriter(
 	}
 }
 
+// text 返回已累积的助手全文；只应在 stream 全部结束后读取。
+func (w *deltaWriter) text() string {
+	return w.full.String()
+}
+
 func (w *deltaWriter) add(ctx context.Context, content string) error {
 	w.pending = append(w.pending, []rune(content)...)
 	_, _ = w.full.WriteString(content)

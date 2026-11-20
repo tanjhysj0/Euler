@@ -91,6 +91,8 @@ type Request struct {
 	SessionID          uuid.UUID
 	WorkspaceID        uuid.UUID
 	AssistantMessageID uuid.UUID
+	// Input 是触发本次 run 的用户消息，供 run 层建立 trace 时记录。
+	Input string
 }
 
 // Runner 执行一个 run，直到完成、失败或被取消。

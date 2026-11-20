@@ -22,7 +22,7 @@ import (
 
 func TestWaitingApprovalRunTimesOut(t *testing.T) {
 	fixture := newManagerFixture(t)
-	manager := NewManager(fixture.store, newFakeRunner(), Limits{MaxDuration: time.Second})
+	manager := NewManager(fixture.store, newFakeRunner(), Limits{MaxDuration: time.Second}, nil)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

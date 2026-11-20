@@ -20,6 +20,7 @@ import (
 
 	"euler/internal/logging"
 	"euler/internal/tools"
+	"euler/internal/tracing"
 )
 
 // ErrModelRoundLimit 用于中止模型轮次预算耗尽的 run。
@@ -101,7 +102,7 @@ func newRoundLimitedModel(base model.ToolCallingChatModel, maxRounds int) *round
 func (m *roundLimitedModel) Generate(
 	ctx context.Context, input []*schema.Message, opts ...model.Option,
 ) (*schema.Message, error) {
-	if err := m.count(); err != nil {
+	if err := m.count(ctx); err != nil {
 		return nil, err
 	}
 	return m.base.Generate(ctx, input, opts...)
@@ -111,7 +112,7 @@ func (m *roundLimitedModel) Generate(
 func (m *roundLimitedModel) Stream(
 	ctx context.Context, input []*schema.Message, opts ...model.Option,
 ) (*schema.StreamReader[*schema.Message], error) {
-	if err := m.count(); err != nil {
+	if err := m.count(ctx); err != nil {
 		return nil, err
 	}
 	return m.base.Stream(ctx, input, opts...)
@@ -128,8 +129,11 @@ func (m *roundLimitedModel) WithTools(
 	return &roundLimitedModel{base: wrapped, calls: m.calls, max: m.max}, nil
 }
 
-func (m *roundLimitedModel) count() error {
-	if m.calls.Add(singleModelCall) > int64(m.max) {
+func (m *roundLimitedModel) count(ctx context.Context) error {
+	used := m.calls.Add(singleModelCall)
+	if used > int64(m.max) {
+		// 预算在模型真正发起请求前就已耗尽，需要显式写入追踪才能与模型失败区分
+		tracing.RecordBudgetExhausted(ctx, int(used), m.max)
 		// 用带错误码的包装保留 errors.Is 语义，同时让 run 层记录可归因的失败原因
 		return &tools.CodedError{
 			Code: codeModelRoundLimit,
@@ -170,6 +174,7 @@ func (m *retryModel) Generate(
 		if !retryable(ctx, err, attempt) {
 			return nil, m.mapError(ctx, err)
 		}
+		tracing.RecordRetry(ctx, attempt+firstAttempt+singleModelCall, err)
 		if waitErr := waitRetry(ctx, attempt); waitErr != nil {
 			return nil, waitErr
 		}
@@ -188,6 +193,7 @@ func (m *retryModel) Stream(
 		if !retryable(ctx, err, attempt) {
 			return nil, m.mapError(ctx, err)
 		}
+		tracing.RecordRetry(ctx, attempt+firstAttempt+singleModelCall, err)
 		if waitErr := waitRetry(ctx, attempt); waitErr != nil {
 			return nil, waitErr
 		}

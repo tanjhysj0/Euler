@@ -239,7 +239,7 @@ func newManagerFixture(t *testing.T) *managerFixture {
 	events := event.NewStore(db, event.NewHub())
 	store := NewStore(db, events, nil)
 	runner := newFakeRunner()
-	manager := NewManager(store, runner, Limits{MaxDuration: 10 * time.Second})
+	manager := NewManager(store, runner, Limits{MaxDuration: 10 * time.Second}, nil)
 	// 在会话清理之后注册，确保 worker 先停止再删除数据行。
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

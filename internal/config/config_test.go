@@ -78,6 +78,77 @@ func TestLoadRejectsRelativeShellPathPrefix(t *testing.T) {
 	}
 }
 
+// clearLangfuseEnv 清空环境里的 Langfuse 配置，保证测试不受外部环境影响。
+func clearLangfuseEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{
+		"EULER_LANGFUSE_HOST", "EULER_LANGFUSE_PUBLIC_KEY", "EULER_LANGFUSE_SECRET_KEY",
+		"LANGFUSE_BASE_URL", "LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
+	} {
+		t.Setenv(name, "")
+	}
+}
+
+func TestLoadParsesLangfuse(t *testing.T) {
+	clearLangfuseEnv(t)
+	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	t.Setenv("EULER_LANGFUSE_SECRET_KEY", "sk-lf-test")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := "langfuse:\n  host: https://cloud.langfuse.com\n  public_key: pk-lf-test\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Langfuse.Enabled() || cfg.Langfuse.SecretKey != "sk-lf-test" {
+		t.Fatalf("langfuse = %+v", cfg.Langfuse)
+	}
+}
+
+func TestLoadLangfuseFromEnvironment(t *testing.T) {
+	clearLangfuseEnv(t)
+	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	t.Setenv("LANGFUSE_BASE_URL", "https://jp.cloud.langfuse.com")
+	t.Setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+	t.Setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Langfuse.Enabled() || cfg.Langfuse.SecretKey != "sk-lf-test" {
+		t.Fatalf("langfuse = %+v", cfg.Langfuse)
+	}
+}
+
+func TestLoadRejectsIncompleteLangfuse(t *testing.T) {
+	clearLangfuseEnv(t)
+	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("langfuse:\n  host: https://cloud.langfuse.com\n"),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected incomplete langfuse error")
+	}
+}
+
+func TestLoadRejectsLangfuseHostWithoutScheme(t *testing.T) {
+	clearLangfuseEnv(t)
+	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	t.Setenv("EULER_LANGFUSE_SECRET_KEY", "sk-lf-test")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := "langfuse:\n  host: cloud.langfuse.com\n  public_key: pk-lf-test\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected langfuse host scheme error")
+	}
+}
+
 func TestLoadRequiresDatabaseURL(t *testing.T) {
 	t.Setenv("EULER_DATABASE_URL", "")
 	if _, err := Load(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
