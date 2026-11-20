@@ -107,6 +107,53 @@ func TestRunTaskAutoApprovesAndExtractsPatch(t *testing.T) {
 	}
 }
 
+func TestRunTaskMarksNoActionWhenRunDoesNothing(t *testing.T) {
+	repo := newRepo(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/v1/bootstrap", func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "euler_local", Value: "t", Path: "/"})
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/api/v1/model-profiles", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"id":"p1","model":"m1"}`)
+	})
+	mux.HandleFunc("/api/v1/sessions", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"id":"s1"}`)
+	})
+	mux.HandleFunc("/api/v1/sessions/s1/runs", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = fmt.Fprint(w, `{"run":{"id":"r1"}}`)
+	})
+	mux.HandleFunc("/api/v1/runs/r1/events", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"seq\":1,\"type\":\"run.completed\",\"payload\":{}}\n\n")
+	})
+	mux.HandleFunc("/api/v1/runs/r1", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"run":{"status":"succeeded"},"tool_calls":[],"approvals":[]}`)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client, err := NewClient(context.Background(), Options{
+		BaseURL: server.URL, ModelBaseURL: "http://example", Model: "m",
+		APIKeyEnv: "TEST_KEY", RunTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	pred := client.RunTask(context.Background(),
+		task.Task{ID: "demo-001", Issue: "修复"}, repo)
+	if pred.Meta.Status != statusNoAction {
+		t.Fatalf("status = %s, err = %s", pred.Meta.Status, pred.Meta.Error)
+	}
+	if pred.ModelPatch != "" {
+		t.Fatalf("空跑不应产生补丁: %q", pred.ModelPatch)
+	}
+}
+
 func TestPollApprovesPendingApproval(t *testing.T) {
 	var approved atomic.Int32
 	mux := http.NewServeMux()

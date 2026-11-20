@@ -26,6 +26,7 @@ const (
 	jsonTimeout       = 60 * time.Second
 	maxPatchBytes     = 2 * 1024 * 1024
 	statusCompleted   = "completed"
+	statusNoAction    = "no_action"
 	statusFailed      = "failed"
 	statusTimeout     = "timeout"
 	statusError       = "error"
@@ -271,6 +272,11 @@ func (c *Client) RunTask(
 	pred.Meta.DiffAdded = added
 	pred.Meta.DiffDeleted = deleted
 	pred.Meta.TouchedTestFiles = touched
+	// 正常结束但零工具调用且无补丁，说明 Agent 空跑，单独标记为异常
+	if pred.Meta.Status == statusCompleted && pred.Meta.ToolCalls == 0 &&
+		strings.TrimSpace(pred.ModelPatch) == "" {
+		pred.Meta.Status = statusNoAction
+	}
 	return pred
 }
 

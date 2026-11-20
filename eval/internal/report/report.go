@@ -67,6 +67,7 @@ type Totals struct {
 	NoChanges    int     `json:"no_changes"`
 	BuildFailed  int     `json:"build_failed"`
 	Error        int     `json:"error"`
+	NoAction     int     `json:"no_action"`
 }
 
 // Report 是 report.json 的完整内容。
@@ -174,8 +175,11 @@ func Summarize(results []TaskResult, preds []Prediction) Totals {
 		}
 	}
 	for _, pred := range preds {
-		if pred.Meta.Status == "error" {
+		switch pred.Meta.Status {
+		case "error":
 			totals.Error++
+		case "no_action":
+			totals.NoAction++
 		}
 	}
 	if totals.Tasks > 0 {

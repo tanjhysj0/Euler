@@ -35,10 +35,11 @@ func TestSummarize(t *testing.T) {
 	preds := []Prediction{
 		{InstanceID: "d", Meta: Meta{Status: "error"}},
 		{InstanceID: "e", Meta: Meta{Status: "completed"}},
+		{InstanceID: "f", Meta: Meta{Status: "no_action"}},
 	}
 	totals := Summarize(results, preds)
-	if totals.Tasks != 5 || totals.Resolved != 1 || totals.PatchFailed != 1 ||
-		totals.BuildFailed != 1 || totals.Error != 1 {
+	if totals.Tasks != 6 || totals.Resolved != 1 || totals.PatchFailed != 1 ||
+		totals.BuildFailed != 1 || totals.Error != 1 || totals.NoAction != 1 {
 		t.Fatalf("totals = %+v", totals)
 	}
 }
