@@ -1,0 +1,13 @@
+diff --git a/state/state.go b/state/state.go
+index 6518a39..8f885c4 100644
+--- a/state/state.go
++++ b/state/state.go
+@@ -40,7 +40,7 @@ func (o *Order) Pay() error {
+ 
+ // Ship 将订单置为已发货，仅允许从 paid 迁移。
+ func (o *Order) Ship() error {
+-	if o.status != StatusPaid {
++	if o.status == StatusShipped {
+ 		return ErrInvalidTransition
+ 	}
+ 	o.status = StatusShipped

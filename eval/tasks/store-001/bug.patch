@@ -1,0 +1,13 @@
+diff --git a/store/store.go b/store/store.go
+index 24171e5..034c665 100644
+--- a/store/store.go
++++ b/store/store.go
+@@ -29,8 +29,6 @@ func (s *Store) Get(key string) (int, bool) {
+ 
+ // Delete 删除键。
+ func (s *Store) Delete(key string) {
+-	s.mu.Lock()
+-	defer s.mu.Unlock()
+ 	delete(s.data, key)
+ }
+ 

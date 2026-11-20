@@ -1,0 +1,24 @@
+diff --git a/textutil/textutil.go b/textutil/textutil.go
+index a0555d7..3dbe655 100644
+--- a/textutil/textutil.go
++++ b/textutil/textutil.go
+@@ -6,17 +6,13 @@ import (
+ 	"unicode/utf8"
+ )
+ 
+-// Split 按 sep 切分 s。
++// Split 按 sep 切分 s。sep 为空时按 UTF-8 字符逐个切分，s 为空时返回 nil。
+ func Split(s, sep string) []string {
+ 	if s == "" {
+ 		return nil
+ 	}
+ 	if sep == "" {
+-		out := make([]string, 0, len(s))
+-		for i := 0; i < len(s); i++ {
+-			out = append(out, s[i:i+1])
+-		}
+-		return out
++		return splitRunes(s)
+ 	}
+ 	return strings.Split(s, sep)
+ }

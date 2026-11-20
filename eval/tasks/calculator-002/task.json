@@ -1,0 +1,20 @@
+{
+  "id": "calculator-002",
+  "title": "除零未返回错误",
+  "issue": "calculator.Eval(\"1/0\") 返回了 (0, nil)。期望除数为零时返回 ErrDivideByZero，调用方据此可以提示用户。请修复，并保持现有优先级与括号行为。",
+  "difficulty": "easy",
+  "tags": [
+    "error-handling"
+  ],
+  "protected_tests": [
+    "calculator/calculator_test.go"
+  ],
+  "fail_to_pass": [
+    "TestEvalDivideByZeroHidden"
+  ],
+  "pass_to_pass": [
+    "TestEvalPrecedence",
+    "TestEvalParens",
+    "TestEvalInvalid"
+  ]
+}
