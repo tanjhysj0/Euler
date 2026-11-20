@@ -36,6 +36,7 @@ const (
 	eventRunInterrupted = "run.interrupted"
 	codeRunTimeout      = "run_timeout"
 	codeRunFailed       = "run_failed"
+	emptyText           = ""
 	sessionSeqStep      = 1
 	initialNextEventSeq = 1
 	emptyLastEventSeq   = 0

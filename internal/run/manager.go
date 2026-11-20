@@ -128,7 +128,7 @@ func (m *Manager) execute(ctx context.Context, request Request) {
 	if err != nil {
 		slog.Error("mark run running", logKeyRunID, request.RunID,
 			logKeyError, logging.Redact(err.Error()))
-		m.failRun(dbCtx, request.RunID)
+		m.failRun(dbCtx, request.RunID, logging.Redact(err.Error()))
 		return
 	}
 	if !started {
@@ -141,12 +141,12 @@ func (m *Manager) execute(ctx context.Context, request Request) {
 	m.finish(dbCtx, request, m.runner.Run(ctx, request))
 }
 
-// handlePanic 将 worker 的 panic 记录为失败的 run；panic 值仅在脱敏后写入
-// 日志，绝不会出现在响应或事件中。
+// handlePanic 将 worker 的 panic 记录为失败的 run；panic 值脱敏后写入
+// error_message，并随 run.failed 事件发布。
 func (m *Manager) handlePanic(ctx context.Context, request Request, recovered any) {
 	detail := logging.Redact(fmt.Sprintf("%v", recovered))
 	slog.Error("run worker panic", logKeyRunID, request.RunID, logKeyError, detail)
-	m.failRun(context.WithoutCancel(ctx), request.RunID)
+	m.failRun(context.WithoutCancel(ctx), request.RunID, detail)
 }
 
 func (m *Manager) finish(ctx context.Context, request Request, runErr error) {
@@ -169,6 +169,7 @@ func (m *Manager) finish(ctx context.Context, request Request, runErr error) {
 			Status:        StatusFailed,
 			MessageStatus: messageFailed,
 			ErrorCode:     codeRunTimeout,
+			ErrorMessage:  "run timed out",
 			EventType:     eventRunFailed,
 		})
 	case errors.As(runErr, &coded):
@@ -179,21 +180,23 @@ func (m *Manager) finish(ctx context.Context, request Request, runErr error) {
 			Status:        StatusFailed,
 			MessageStatus: messageFailed,
 			ErrorCode:     coded.ErrorCode(),
+			ErrorMessage:  logging.Redact(runErr.Error()),
 			EventType:     eventRunFailed,
 		})
 	default:
 		slog.Error("run failed", logKeyRunID, request.RunID,
 			logKeyError, logging.Redact(runErr.Error()))
-		m.failRun(ctx, request.RunID)
+		m.failRun(ctx, request.RunID, logging.Redact(runErr.Error()))
 	}
 }
 
-func (m *Manager) failRun(ctx context.Context, runID uuid.UUID) {
+func (m *Manager) failRun(ctx context.Context, runID uuid.UUID, message string) {
 	m.finishRun(ctx, FinishInput{
 		RunID:         runID,
 		Status:        StatusFailed,
 		MessageStatus: messageFailed,
 		ErrorCode:     codeRunFailed,
+		ErrorMessage:  message,
 		EventType:     eventRunFailed,
 	})
 }

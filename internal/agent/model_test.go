@@ -22,6 +22,9 @@ func TestRoundLimitedModelStopsExcessiveCalls(t *testing.T) {
 	require.NoError(t, err)
 	_, err = limited.Generate(context.Background(), input)
 	require.ErrorIs(t, err, ErrModelRoundLimit)
+	var coded interface{ ErrorCode() string }
+	require.ErrorAs(t, err, &coded)
+	require.Equal(t, codeModelRoundLimit, coded.ErrorCode())
 	require.Equal(t, 1, base.generateCalls)
 }
 

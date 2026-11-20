@@ -160,6 +160,7 @@ type FinishInput struct {
 	Status        string
 	MessageStatus string
 	ErrorCode     string
+	ErrorMessage  string
 	EventType     string
 }
 
@@ -167,8 +168,11 @@ type FinishInput struct {
 // 终态是幂等的，不会再写入事件。
 func (s *Store) Finish(ctx context.Context, input FinishInput) error {
 	payload := map[string]any{}
-	if input.ErrorCode != "" {
+	if input.ErrorCode != emptyText {
 		payload["error_code"] = input.ErrorCode
+	}
+	if input.ErrorMessage != emptyText {
+		payload["error_message"] = input.ErrorMessage
 	}
 	var stored event.Event
 	changed := false
@@ -205,8 +209,11 @@ func (s *Store) Finish(ctx context.Context, input FinishInput) error {
 func applyTerminal(tx *gorm.DB, input FinishInput) error {
 	now := time.Now().UTC()
 	updates := map[string]any{"status": input.Status, "finished_at": now}
-	if input.ErrorCode != "" {
+	if input.ErrorCode != emptyText {
 		updates["error_code"] = input.ErrorCode
+	}
+	if input.ErrorMessage != emptyText {
+		updates["error_message"] = input.ErrorMessage
 	}
 	err := tx.Model(&persistence.Run{}).Where("id = ?", input.RunID).
 		Updates(updates).Error

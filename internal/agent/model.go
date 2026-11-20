@@ -30,6 +30,7 @@ const (
 	codeModelRateLimited = "model_rate_limited"
 	codeModelUnavailable = "model_unavailable"
 	codeModelProtocol    = "model_protocol"
+	codeModelRoundLimit  = "model_round_limit"
 
 	maxModelRetries = 2
 	firstAttempt    = 0
@@ -108,7 +109,12 @@ func (m *roundLimitedModel) WithTools(
 
 func (m *roundLimitedModel) count() error {
 	if m.calls.Add(singleModelCall) > int64(m.max) {
-		return ErrModelRoundLimit
+		// 用带错误码的包装保留 errors.Is 语义，同时让 run 层记录可归因的失败原因
+		return &tools.CodedError{
+			Code: codeModelRoundLimit,
+			Msg:  ErrModelRoundLimit.Error(),
+			Err:  ErrModelRoundLimit,
+		}
 	}
 	return nil
 }

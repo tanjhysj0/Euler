@@ -142,6 +142,27 @@ func TestStoreCancelLeavesSnapshotTerminal(t *testing.T) {
 	require.Equal(t, int64(1), countRunEvents(t, fixture.db, result.Run.ID, eventRunCancelled))
 }
 
+func TestStoreFinishPersistsErrorReason(t *testing.T) {
+	fixture := newManagerFixture(t)
+	result, err := fixture.store.Start(context.Background(), fixture.sessionID, "fail")
+	require.NoError(t, err)
+	err = fixture.store.Finish(context.Background(), FinishInput{
+		RunID:         result.Run.ID,
+		Status:        StatusFailed,
+		MessageStatus: messageFailed,
+		ErrorCode:     "model_round_limit",
+		ErrorMessage:  "model round limit exceeded",
+		EventType:     eventRunFailed,
+	})
+	require.NoError(t, err)
+	snapshot, err := fixture.store.Get(context.Background(), result.Run.ID)
+	require.NoError(t, err)
+	require.NotNil(t, snapshot.Run.ErrorCode)
+	require.Equal(t, "model_round_limit", *snapshot.Run.ErrorCode)
+	require.NotNil(t, snapshot.Run.ErrorMessage)
+	require.Equal(t, "model round limit exceeded", *snapshot.Run.ErrorMessage)
+}
+
 func TestStoreStartHealthCheckFailureWritesNothing(t *testing.T) {
 	fixture := newManagerFixture(t)
 	store := NewStore(fixture.db, fixture.events, failingChecker{})

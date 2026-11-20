@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -148,13 +149,85 @@ func TestManagerMapsTimeoutWithoutDatabase(t *testing.T) {
 	require.Eventually(t, func() bool {
 		for _, input := range store.finished() {
 			if input.RunID == started.Run.ID && input.Status == StatusFailed &&
-				input.ErrorCode == codeRunTimeout {
+				input.ErrorCode == codeRunTimeout &&
+				input.ErrorMessage == "run timed out" {
 				return true
 			}
 		}
 		return false
 	}, time.Second, 5*time.Millisecond)
 }
+
+func TestManagerRecordsFailureReasonWithoutDatabase(t *testing.T) {
+	store := newUnitFakeStore()
+	runner := &unitFakeRunner{fn: func(context.Context) error {
+		return errors.New("model exploded")
+	}}
+	manager := newUnitManager(t, store, runner, time.Second)
+	started, err := manager.Start(context.Background(), uuid.New(), "fail")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		for _, input := range store.finished() {
+			if input.RunID == started.Run.ID && input.Status == StatusFailed &&
+				input.ErrorCode == codeRunFailed &&
+				input.ErrorMessage == "model exploded" {
+				return true
+			}
+		}
+		return false
+	}, time.Second, 5*time.Millisecond)
+}
+
+func TestManagerRecordsCodedFailureReasonWithoutDatabase(t *testing.T) {
+	store := newUnitFakeStore()
+	runner := &unitFakeRunner{fn: func(context.Context) error {
+		return codedMessageError{
+			code: "model_round_limit",
+			msg:  "model round limit exceeded",
+		}
+	}}
+	manager := newUnitManager(t, store, runner, time.Second)
+	started, err := manager.Start(context.Background(), uuid.New(), "limit")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		for _, input := range store.finished() {
+			if input.RunID == started.Run.ID && input.Status == StatusFailed &&
+				input.ErrorCode == "model_round_limit" &&
+				input.ErrorMessage == "model round limit exceeded" {
+				return true
+			}
+		}
+		return false
+	}, time.Second, 5*time.Millisecond)
+}
+
+func TestManagerRedactsFailureReasonWithoutDatabase(t *testing.T) {
+	store := newUnitFakeStore()
+	runner := &unitFakeRunner{fn: func(context.Context) error {
+		return errors.New("request failed api_key=sk-secret-value")
+	}}
+	manager := newUnitManager(t, store, runner, time.Second)
+	started, err := manager.Start(context.Background(), uuid.New(), "fail")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		for _, input := range store.finished() {
+			if input.RunID == started.Run.ID &&
+				input.ErrorMessage == "request failed api_key=[REDACTED]" {
+				return true
+			}
+		}
+		return false
+	}, time.Second, 5*time.Millisecond)
+}
+
+// codedMessageError 让测试同时控制错误码与错误信息。
+type codedMessageError struct {
+	code string
+	msg  string
+}
+
+func (e codedMessageError) Error() string     { return e.msg }
+func (e codedMessageError) ErrorCode() string { return e.code }
 
 func TestManagerCancelDelegatesToStore(t *testing.T) {
 	store := newUnitFakeStore()
@@ -181,7 +254,7 @@ func TestManagerRecoversPanicWithoutDatabase(t *testing.T) {
 	require.Eventually(t, func() bool {
 		for _, input := range store.finished() {
 			if input.RunID == started.Run.ID && input.Status == StatusFailed &&
-				input.ErrorCode == codeRunFailed {
+				input.ErrorCode == codeRunFailed && input.ErrorMessage == "boom" {
 				return true
 			}
 		}
