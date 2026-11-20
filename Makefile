@@ -8,6 +8,10 @@ EULER_MODEL_BASE_URL ?= https://api.deepseek.com
 EULER_MODEL ?= deepseek-v4-flash
 EULER_REASONING_EFFORT ?= high
 
+# harbor-test 默认覆盖的编码数据集；可用命令行或环境变量覆盖。
+HARBOR_DATASETS ?= programbench devopsgym tb3-preview-v2 terminal-bench-3-test swe-gen-js swe-marathon android-bench swe-gen-rust LiteCoder-rl swe-gen-cpp swe-gen-java mimo-v26-code swe-gen-go aider-polyglot algotune mimo-v26-terminal humanevalfix bigcodebench-hard-complete tb21-code-debug binary-audit
+HARBOR_PER_DATASET ?= 1
+
 build:
 	npm --prefix web ci && npm --prefix web run build
 	go build -o bin/euler ./cmd/euler
@@ -76,12 +80,43 @@ harbor-test:
 			fi; \
 			sleep 1; \
 		done; \
-		echo "==> 运行 Harbor (mode=$${HARBOR_MODE:-coding})"; \
+		echo "==> 运行 Harbor"; \
 		export EULER_MODEL_BASE_URL='$(EULER_MODEL_BASE_URL)'; \
 		export EULER_MODEL='$(EULER_MODEL)'; \
 		export EULER_REASONING_EFFORT='$(EULER_REASONING_EFFORT)'; \
-		if [ "$${HARBOR_MODE:-coding}" = "smoke" ]; then \
+		if [ "$${HARBOR_MODE:-multi}" = "smoke" ]; then \
 			./harbor_eval/scripts/run-smoke.sh; \
-		else \
+		elif [ "$${HARBOR_MODE:-multi}" = "coding" ]; then \
 			./harbor_eval/scripts/run-coding.sh; \
+		else \
+			./harbor_eval/scripts/prepare-workspace.sh; \
+			run_id=$$(date +%Y%m%d-%H%M%S); \
+			job_name="coding-multi-$$run_id"; \
+			results_dir="harbor_eval/results/$$run_id"; \
+			cfg="$${TMPDIR:-/tmp}/euler-harbor-multi-$$run_id.yaml"; \
+			{ \
+				echo "job_name: $$job_name"; \
+				echo "jobs_dir: harbor_eval/results"; \
+				echo "n_concurrent_trials: 1"; \
+				echo "datasets:"; \
+				for ds in $(HARBOR_DATASETS); do \
+					echo "  - path: harbor_eval/tasks/_downloads/$$ds"; \
+					echo "    n_tasks: $(HARBOR_PER_DATASET)"; \
+				done; \
+				echo "agents:"; \
+				echo "  - import_path: agents.euler_agent:EulerAgent"; \
+				echo "environment:"; \
+				echo "  type: docker"; \
+				echo "  mounts:"; \
+				echo "    - type: bind"; \
+				echo "      source: /tmp/euler-harbor/workspace"; \
+				echo "      target: /mnt/euler-workspace"; \
+			} > "$$cfg"; \
+			echo "  数据集: $$(echo $(HARBOR_DATASETS) | wc -w | tr -d ' ') 个，每个 $(HARBOR_PER_DATASET) 个任务"; \
+			PYTHONPATH="$$PWD/harbor_eval$${PYTHONPATH:+:$$PYTHONPATH}" \
+				harbor run -c "$$cfg" -y --job-name "$$job_name" -o "$$results_dir"; \
+			job_dir="$$results_dir/$$job_name"; \
+			echo "==> 结果目录: $$job_dir"; \
+			find "$$job_dir" -name reward.txt -exec cat {} \; 2>/dev/null | \
+				awk '{total++; if ($$1 == "1") passed++} END {printf "==> 通过 %d/%d\n", passed, total}'; \
 		fi

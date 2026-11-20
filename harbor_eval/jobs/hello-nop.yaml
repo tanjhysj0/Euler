@@ -10,4 +10,4 @@ environment:
   mounts:
     - type: bind
       source: /tmp/euler-harbor/workspace
-      target: /app
+      target: /mnt/euler-workspace

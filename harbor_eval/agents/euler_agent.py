@@ -19,13 +19,15 @@ from agents.euler_client import TERMINAL_EVENTS, EulerClient
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 DEFAULT_WORKSPACE = "/tmp/euler-harbor/workspace"
-BASELINE_DIR = "/opt/baseline"
+# 宿主机工作区在容器内的挂载点。刻意不使用 /app：任务镜像的原始文件通常
+# 位于 /app，若把宿主机目录挂到 /app 会覆盖它们，导致无法播种工作区。
+DEFAULT_HOST_MOUNT = "/mnt/euler-workspace"
 APPROVAL_REASON = "euler-harbor"
 MAX_RECONNECTS = 3
 RECONNECT_DELAY_SECONDS = 1.0
 HEALTH_RETRIES = 30
 HEALTH_RETRY_DELAY_SECONDS = 1.0
-DANGEROUS_WORKDIRS = frozenset({"/", "/opt", BASELINE_DIR})
+DANGEROUS_WORKDIRS = frozenset({"/", "/opt", "/mnt"})
 # 预算耗尽但工作区已有产出时按完成收尾，避免把已交付的结果记为异常
 ROUND_LIMIT_CODE = "model_round_limit"
 EXECUTION_GUIDANCE = (
@@ -56,6 +58,16 @@ def validate_workdir(workdir: str) -> str:
     normalized = posixpath.normpath(workdir)
     if normalized in DANGEROUS_WORKDIRS or not normalized.strip("/"):
         raise ValueError(f"refusing dangerous workdir: {normalized!r}")
+    return normalized
+
+
+def validate_mount(path: str) -> str:
+    """校验宿主机工作区在容器内的挂载点，拒绝空值、相对路径与危险根路径。"""
+    if not path or not path.startswith("/"):
+        raise ValueError(f"invalid mount path: {path!r}")
+    normalized = posixpath.normpath(path)
+    if normalized in DANGEROUS_WORKDIRS or not normalized.strip("/"):
+        raise ValueError(f"refusing dangerous mount path: {normalized!r}")
     return normalized
 
 
@@ -124,6 +136,7 @@ class EulerAgent(BaseAgent):
         super().__init__(logs_dir=logs_dir, model_name=model_name, **kwargs)
         self.base_url = os.environ.get("EULER_BASE_URL", DEFAULT_BASE_URL)
         self.workspace = os.environ.get("EULER_HARBOR_WORKSPACE", DEFAULT_WORKSPACE)
+        self.host_mount = os.environ.get("EULER_HOST_MOUNT", DEFAULT_HOST_MOUNT)
         self.profile_id = os.environ.get("EULER_PROFILE_ID") or None
         self.model_base_url = os.environ.get("EULER_MODEL_BASE_URL") or None
         self.model = os.environ.get("EULER_MODEL") or None
@@ -282,16 +295,29 @@ class EulerAgent(BaseAgent):
     async def _seed_workspace(
         self, environment: BaseEnvironment, workdir: str
     ) -> None:
-        # 先校验再拼 shell 命令，拒不安全路径
-        safe_workdir = validate_workdir(workdir)
-        quoted = shlex.quote(safe_workdir)
+        # 任务原始文件仍在镜像的 workdir 中（挂载点已移到独立目录），
+        # 因此直接从 workdir 复制到宿主机挂载点，无需任务镜像预置基线副本。
+        source = validate_workdir(workdir)
+        target = validate_mount(self.host_mount)
+        if source == target:
+            raise ValueError("host mount must differ from task workdir")
+        quoted_source = shlex.quote(source)
+        quoted_target = shlex.quote(target)
+        await environment.exec(command=f"mkdir -p {quoted_target}")
         await environment.exec(
-            command=f"rm -rf {quoted}/* {quoted}/.[!.]* 2>/dev/null || true"
+            command=(
+                f"rm -rf {quoted_target}/* {quoted_target}/.[!.]* "
+                "2>/dev/null || true"
+            )
         )
-        result = await environment.exec(command=f"cp -a {BASELINE_DIR}/. {quoted}/")
+        result = await environment.exec(
+            command=f"cp -a {quoted_source}/. {quoted_target}/"
+        )
         if result.return_code != 0:
-            raise RuntimeError(f"seed workspace failed: {result.stderr}")
-        result = await environment.exec(command=f"chmod -R a+rwX {quoted}")
+            raise RuntimeError(
+                f"seed workspace failed: {result.stderr or result.stdout}"
+            )
+        result = await environment.exec(command=f"chmod -R a+rwX {quoted_target}")
         if result.return_code != 0:
             raise RuntimeError(f"chmod workspace failed: {result.stderr}")
 
