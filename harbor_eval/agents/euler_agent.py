@@ -75,6 +75,20 @@ def git_baseline(workspace: str) -> None:
         subprocess.run(command, check=True, capture_output=True, text=True)
 
 
+def workspace_changed(workspace: str) -> bool:
+    """判断 baseline 之后工作区是否有改动；git 不可用时按有改动处理。"""
+    result = subprocess.run(
+        ["git", "-C", workspace, "status", "--porcelain"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        # 无法判定时不能误报 no_action
+        return True
+    return bool(result.stdout.strip())
+
+
 class EulerAgent(BaseAgent):
     """把宿主机 Euler 包装成 Harbor 外部 Agent。"""
 
@@ -137,8 +151,18 @@ class EulerAgent(BaseAgent):
                     "session_id": session_id,
                     "tool_calls": len(snapshot.get("tool_calls") or []),
                     "approvals": len(snapshot.get("approvals") or []),
+                    "outcome": "failed",
                 }
                 status = (snapshot.get("run") or {}).get("status")
+                if status == "succeeded":
+                    # 零工具调用且工作区无改动，属于空跑，单独标记为异常
+                    no_action = (
+                        context.metadata["tool_calls"] == 0
+                        and not workspace_changed(workspace)
+                    )
+                    context.metadata["outcome"] = (
+                        "no_action" if no_action else "completed"
+                    )
                 if status != "succeeded":
                     raise RuntimeError(f"euler run ended with status={status}")
                 run_finished = True

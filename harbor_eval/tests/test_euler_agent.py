@@ -5,9 +5,11 @@ import pytest
 
 from agents.euler_agent import (
     APPROVAL_REASON,
+    DEFAULT_WORKSPACE,
     EulerAgent,
     validate_host_workspace,
     validate_workdir,
+    workspace_changed,
 )
 from agents.euler_client import Event
 
@@ -240,6 +242,87 @@ def test_run_cancels_run_and_reraises_on_cancel(tmp_path, monkeypatch):
         asyncio.run(make_agent(tmp_path).run("fix", FakeEnvironment(), context))
 
     assert client.cancelled == ["run-1"]
+
+
+def test_workspace_changed_assumes_change_when_git_fails(tmp_path):
+    # 非 git 目录无法判定，按“有改动”处理，避免误报 no_action
+    assert workspace_changed(str(tmp_path)) is True
+
+
+def test_run_marks_no_action_when_run_does_nothing(tmp_path, monkeypatch):
+    client = FakeRunClient([[Event(1, "run.completed", {})]])
+    monkeypatch.setattr("agents.euler_agent.EulerClient", lambda base_url: client)
+    monkeypatch.setattr("agents.euler_agent.git_baseline", lambda workspace: None)
+    monkeypatch.setattr(
+        "agents.euler_agent.workspace_changed", lambda workspace: False
+    )
+    agent = make_agent(tmp_path)
+    agent.workspace = DEFAULT_WORKSPACE
+    context = SimpleNamespace(metadata=None)
+
+    asyncio.run(agent.run("fix", FakeEnvironment(), context))
+
+    assert context.metadata["outcome"] == "no_action"
+    assert context.metadata["tool_calls"] == 0
+
+
+def test_run_marks_completed_when_workspace_changed_without_tools(
+    tmp_path, monkeypatch
+):
+    client = FakeRunClient([[Event(1, "run.completed", {})]])
+    monkeypatch.setattr("agents.euler_agent.EulerClient", lambda base_url: client)
+    monkeypatch.setattr("agents.euler_agent.git_baseline", lambda workspace: None)
+    monkeypatch.setattr(
+        "agents.euler_agent.workspace_changed", lambda workspace: True
+    )
+    agent = make_agent(tmp_path)
+    agent.workspace = DEFAULT_WORKSPACE
+    context = SimpleNamespace(metadata=None)
+
+    asyncio.run(agent.run("fix", FakeEnvironment(), context))
+
+    assert context.metadata["outcome"] == "completed"
+
+
+def test_run_marks_completed_when_tools_were_used(tmp_path, monkeypatch):
+    client = FakeRunClient([[Event(1, "run.completed", {})]])
+
+    async def snapshot(_run_id):
+        return {"run": {"status": "succeeded"}, "tool_calls": [{}]}
+
+    client.snapshot = snapshot
+    monkeypatch.setattr("agents.euler_agent.EulerClient", lambda base_url: client)
+    monkeypatch.setattr("agents.euler_agent.git_baseline", lambda workspace: None)
+    monkeypatch.setattr(
+        "agents.euler_agent.workspace_changed", lambda workspace: False
+    )
+    agent = make_agent(tmp_path)
+    agent.workspace = DEFAULT_WORKSPACE
+    context = SimpleNamespace(metadata=None)
+
+    asyncio.run(agent.run("fix", FakeEnvironment(), context))
+
+    assert context.metadata["outcome"] == "completed"
+    assert context.metadata["tool_calls"] == 1
+
+
+def test_run_records_failed_outcome_before_raising(tmp_path, monkeypatch):
+    client = FakeRunClient([[Event(1, "run.failed", {})]])
+
+    async def snapshot(_run_id):
+        return {"run": {"status": "failed"}}
+
+    client.snapshot = snapshot
+    monkeypatch.setattr("agents.euler_agent.EulerClient", lambda base_url: client)
+    monkeypatch.setattr("agents.euler_agent.git_baseline", lambda workspace: None)
+    agent = make_agent(tmp_path)
+    agent.workspace = DEFAULT_WORKSPACE
+    context = SimpleNamespace(metadata=None)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(agent.run("fix", FakeEnvironment(), context))
+
+    assert context.metadata["outcome"] == "failed"
 
 
 def test_validate_host_workspace_rejects_unsafe_paths():
