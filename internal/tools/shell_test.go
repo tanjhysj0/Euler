@@ -57,6 +57,34 @@ func TestShellTimeoutAndTruncation(t *testing.T) {
 	require.True(t, result.TimedOut)
 }
 
+// TestResolveShellPrefersZshThenBashThenSh 验证解释器按优先级选择，
+// 且登录参数只用于支持 -l 的 zsh/bash。
+func TestResolveShellPrefersZshThenBashThenSh(t *testing.T) {
+	shell, args := resolveShell(func(path string) bool { return path == "/bin/zsh" })
+	require.Equal(t, "/bin/zsh", shell)
+	require.Equal(t, []string{loginFlag, stdinFlag}, args)
+
+	shell, args = resolveShell(func(path string) bool { return path == "/bin/bash" })
+	require.Equal(t, "/bin/bash", shell)
+	require.Equal(t, []string{loginFlag, stdinFlag}, args)
+
+	shell, args = resolveShell(func(path string) bool { return path == "/bin/sh" })
+	require.Equal(t, "/bin/sh", shell)
+	require.Equal(t, []string{stdinFlag}, args)
+
+	shell, args = resolveShell(func(string) bool { return false })
+	require.Equal(t, fallbackShell, shell)
+	require.Equal(t, []string{stdinFlag}, args)
+}
+
+// TestResolveShellReturnsExistingBinary 验证真实环境下选中的解释器存在。
+func TestResolveShellReturnsExistingBinary(t *testing.T) {
+	shell, _ := resolveShell(shellExists)
+	info, err := os.Stat(shell)
+	require.NoError(t, err)
+	require.False(t, info.IsDir())
+}
+
 func TestShellReportsExitCode(t *testing.T) {
 	executor := NewShellExecutor(ShellConfig{Timeout: 10 * time.Second, MaxOutputBytes: 1024})
 	result := executor.Execute(context.Background(),

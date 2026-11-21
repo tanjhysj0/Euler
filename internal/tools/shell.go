@@ -15,14 +15,12 @@ import (
 )
 
 const (
-	// defaultShell 是运行每条命令的 macOS 登录 shell。解释器路径保持为
-	// 编译期常量，因此启动的进程是固定的；命令文本通过标准输入传递而不是
-	// 作为参数传入，从而避免模型提供的命令出现在 argv 中。
-	defaultShell = "/bin/zsh"
-	// loginFlag 以登录 shell 启动，使用户的 PATH 设置生效。
+	// loginFlag 以登录 shell 启动，使用户的 PATH 设置生效；仅 zsh/bash 支持。
 	loginFlag = "-l"
 	// stdinFlag 让 shell 从标准输入读取命令。
 	stdinFlag = "-s"
+	// fallbackShell 是候选解释器都不存在时的兜底选择。
+	fallbackShell = "/bin/sh"
 	// envAssignment 分隔环境变量的键与值。
 	envAssignment = "="
 	// emptyCapacity 用于以预设长度构建切片。
@@ -32,6 +30,20 @@ const (
 	// emptyText 表示未配置的可选字符串。
 	emptyText = ""
 )
+
+// shellSpec 描述一个候选解释器及其是否支持登录模式。
+type shellSpec struct {
+	path  string
+	login bool
+}
+
+// shellCandidates 按优先级列出解释器：macOS 宿主优先用 zsh，而任务容器
+// 通常只带 bash 或 sh，因此需要运行时探测，不能写死其中一个。
+var shellCandidates = []shellSpec{
+	{path: "/bin/zsh", login: true},
+	{path: "/bin/bash", login: true},
+	{path: "/bin/sh"},
+}
 
 var (
 	// ErrUnsupportedPlatform 标记当前平台没有适配器的宿主执行。
@@ -80,14 +92,15 @@ type Shell struct{ config ShellConfig }
 // NewShellExecutor 根据配置构建一个 Shell。
 func NewShellExecutor(config ShellConfig) *Shell { return &Shell{config: config} }
 
-// Execute 在 request.Dir 内，把命令作为从标准输入读取的登录 shell 脚本运行，
+// Execute 在 request.Dir 内，把命令作为从标准输入读取的 shell 脚本运行，
 // 并从子进程环境中剔除所有凭据引用。超时或取消会杀死整个进程组，
 // 合并输出会在配置的最大值处截断。
 func (s *Shell) Execute(ctx context.Context, request ShellRequest) ShellResult {
 	shellCtx, cancel := context.WithTimeout(ctx, s.timeout(request.Timeout))
 	defer cancel()
 	output := &limitedWriter{limit: s.config.MaxOutputBytes}
-	cmd := exec.CommandContext(shellCtx, defaultShell, loginFlag, stdinFlag)
+	shell, args := resolveShell(shellExists)
+	cmd := exec.CommandContext(shellCtx, shell, args...) //nolint:gosec // 解释器来自固定候选列表
 	cmd.Dir = request.Dir
 	cmd.Env = SanitizeEnvironment(os.Environ(), request.SecretNames)
 	cmd.Stdin = strings.NewReader(s.script(request.Command))
@@ -96,6 +109,27 @@ func (s *Shell) Execute(ctx context.Context, request ShellRequest) ShellResult {
 		return ShellResult{Err: err}
 	}
 	return collect(shellCtx, output, cmd.Run())
+}
+
+// resolveShell 按优先级返回实际存在的解释器及启动参数；登录参数只对
+// 支持 -l 的 zsh/bash 使用。exists 便于测试注入不同的探测结果。
+func resolveShell(exists func(string) bool) (string, []string) {
+	for _, candidate := range shellCandidates {
+		if !exists(candidate.path) {
+			continue
+		}
+		if candidate.login {
+			return candidate.path, []string{loginFlag, stdinFlag}
+		}
+		return candidate.path, []string{stdinFlag}
+	}
+	return fallbackShell, []string{stdinFlag}
+}
+
+// shellExists 判断候选解释器是否为可用的普通文件。
+func shellExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 // RunGuarded 先向 gate 请求裁决，只有在获批后才启动命令，
