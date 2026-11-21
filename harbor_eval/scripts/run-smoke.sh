@@ -1,35 +1,37 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# 冒烟门禁：Oracle 通过、Euler 通过、nop 不通过。
 repo_root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$repo_root"
 export PYTHONPATH="$repo_root/harbor_eval${PYTHONPATH:+:$PYTHONPATH}"
-export EULER_BASE_URL="${EULER_BASE_URL:-http://127.0.0.1:8080}"
-export EULER_HARBOR_WORKSPACES="${EULER_HARBOR_WORKSPACES:-/tmp/euler-harbor/workspaces}"
+export EULER_MODEL_BASE_URL="${EULER_MODEL_BASE_URL:-https://api.deepseek.com}"
+export EULER_MODEL="${EULER_MODEL:-deepseek-v4-flash}"
+export EULER_REASONING_EFFORT="${EULER_REASONING_EFFORT:-high}"
+
+command -v harbor >/dev/null 2>&1 || { echo "未找到 harbor 命令" >&2; exit 1; }
+command -v docker >/dev/null 2>&1 || { echo "未找到 docker 命令" >&2; exit 1; }
+
+model_host="${EULER_MODEL_BASE_URL#*://}"; model_host="${model_host%%/*}"
+allow_args=(--allow-agent-host "$model_host")
+langfuse_url="${LANGFUSE_HOST:-${LANGFUSE_BASE_URL:-}}"
+if [ -n "$langfuse_url" ]; then
+  langfuse_host="${langfuse_url#*://}"; langfuse_host="${langfuse_host%%/*}"
+  allow_args+=(--allow-agent-host "$langfuse_host")
+fi
+
+make -C "$repo_root" agent-dist
 
 # 每次运行使用唯一标识，避免 Harbor 复用历史 trial 打印过期 reward
 run_id=$(date +%Y%m%d-%H%M%S)
 results_dir="harbor_eval/results/$run_id"
 
-command -v harbor >/dev/null 2>&1 || { echo "未找到 harbor 命令" >&2; exit 1; }
-command -v docker >/dev/null 2>&1 || { echo "未找到 docker 命令" >&2; exit 1; }
-
-./harbor_eval/scripts/prepare-workspace.sh
 harbor run -c harbor_eval/jobs/hello-oracle.yaml -y \
   --job-name "hello-oracle-$run_id" -o "$results_dir"
-
-./harbor_eval/scripts/prepare-workspace.sh
-if ! curl -sf --max-time 5 "$EULER_BASE_URL/health" >/dev/null; then
-  echo "Euler 健康检查失败：$EULER_BASE_URL/health 不可达，请先启动 Euler 服务" >&2
-  exit 1
-fi
-harbor run -c harbor_eval/jobs/hello-euler.yaml -y \
+harbor run -c harbor_eval/jobs/hello-euler.yaml -y "${allow_args[@]}" \
   --job-name "hello-euler-$run_id" -o "$results_dir"
-
-./harbor_eval/scripts/prepare-workspace.sh
 harbor run -c harbor_eval/jobs/hello-nop.yaml -y \
   --job-name "hello-nop-$run_id" -o "$results_dir"
 
-# 只汇总本次 run_id 的结果，并标注路径与 mtime 以确认新鲜度
 echo "===== 本次运行 $run_id 的 reward ====="
 gate_status=0
 for kind in oracle euler nop; do

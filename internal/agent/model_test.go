@@ -28,6 +28,17 @@ func TestRoundLimitedModelStopsExcessiveCalls(t *testing.T) {
 	require.Equal(t, 1, base.generateCalls)
 }
 
+func TestRoundLimitedModelAllowsUnlimitedRounds(t *testing.T) {
+	base := &fakeToolCallingModel{}
+	limited := newRoundLimitedModel(base, 0)
+	input := []*schema.Message{schema.UserMessage("hello")}
+	for range 50 {
+		_, err := limited.Generate(context.Background(), input)
+		require.NoError(t, err)
+	}
+	require.Equal(t, 50, base.generateCalls)
+}
+
 func TestRoundLimitedModelSharesCounterAcrossWithTools(t *testing.T) {
 	base := &fakeToolCallingModel{}
 	limited := newRoundLimitedModel(base, 2)

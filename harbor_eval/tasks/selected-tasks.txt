@@ -1,0 +1,8 @@
+# 精选评测任务：轻量、可在本机 Docker Desktop（arm64 / 4 CPU）上稳定运行。
+# 每行一个仓库相对路径；用 `make harbor-test` 时默认读取本文件。
+# 当前集合全部为已验证可通过的任务，用于快速回归门禁（约 5-6 分钟）。
+harbor_eval/tasks/_downloads/humanevalfix/python-0
+harbor_eval/tasks/_downloads/humanevalfix/python-1
+harbor_eval/tasks/_downloads/aider-polyglot/polyglot_python_affine-cipher
+harbor_eval/tasks/_downloads/tb21-code-debug/headless-terminal
+harbor_eval/tasks/cancel-async-tasks

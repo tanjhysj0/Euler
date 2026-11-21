@@ -1,22 +1,44 @@
-.PHONY: build test lint fmt tidy web-install web-test web-build test-e2e dev-api dev-web harbor-test
+.PHONY: build test lint fmt tidy web-install web-test web-build test-e2e dev-api dev-web harbor-test agent-dist
 
-# Harbor 评测连接的本机数据库；可用同名环境变量覆盖。
-EULER_DATABASE_URL ?= postgres://euler:euler@127.0.0.1:5432/euler?sslmode=disable
-EULER_LOG ?= /tmp/euler-harbor/euler.log
-# Harbor 创建临时模型 profile 所需的默认值，可用同名环境变量覆盖。
+# Harbor 评测使用的默认模型；可用同名环境变量覆盖。
 EULER_MODEL_BASE_URL ?= https://api.deepseek.com
 EULER_MODEL ?= deepseek-v4-flash
 EULER_REASONING_EFFORT ?= high
 
 # harbor-test 默认覆盖的编码数据集；可用命令行或环境变量覆盖。
-HARBOR_DATASETS ?= programbench devopsgym tb3-preview-v2 terminal-bench-3-test swe-gen-js swe-marathon android-bench swe-gen-rust LiteCoder-rl swe-gen-cpp swe-gen-java mimo-v26-code swe-gen-go aider-polyglot algotune mimo-v26-terminal humanevalfix bigcodebench-hard-complete tb21-code-debug binary-audit
+# 注意：programbench 与 swe-marathon 的任务声明了 [agent] network_mode，
+# 需要 Docker 侧的 egress-control（依赖内核 CONFIG_NFT_FIB_INET）；Docker
+# Desktop 的内核不支持，会在任务校验阶段直接失败。需要这些数据集时，
+# 在支持 nftables 的 Linux Docker 主机上通过 HARBOR_TASKS 单独指定。
+HARBOR_DATASETS ?= devopsgym tb3-preview-v2 terminal-bench-3-test swe-gen-js android-bench swe-gen-rust LiteCoder-rl swe-gen-cpp swe-gen-java mimo-v26-code swe-gen-go aider-polyglot algotune mimo-v26-terminal humanevalfix bigcodebench-hard-complete tb21-code-debug binary-audit
 HARBOR_PER_DATASET ?= 1
-# 并发 trial 数；每个 trial 使用独立工作区子目录，因此可以并行。
-HARBOR_CONCURRENCY ?= 1
+# 并发 trial 数。本机 Docker VM 为 4 核 / 3.8GB，而评测任务普遍声明 1 CPU；
+# 实测单容器峰值约 1 核、常驻内存约 130MB，agent 大部分时间在等模型。
+# 取 4 即“一个 trial 占一个核”的安全上限，同时给镜像构建和验证器留出余量；
+# 纯运行（镜像已缓存）时可临时提到 5-6。内存不是瓶颈。
+HARBOR_CONCURRENCY ?= 4
+# 单个 trial 的 agent 阶段硬超时（秒），避免重型任务拖长整批测试。
+# agent 自身预算默认 600s，再加 120s 容器内 exec 余量和 60s 结果回传余量。
+HARBOR_AGENT_TIMEOUT ?= 780
+# 可选：精确指定任务（dataset/task，空格分隔）；设置后忽略精选清单。
+HARBOR_TASKS ?=
+# 精选任务清单（每行一个仓库相对路径）；HARBOR_TASKS 为空时使用。
+HARBOR_TASKS_FILE ?= harbor_eval/tasks/selected-tasks.txt
+HARBOR_SELECTED ?= $(shell grep -v '^\#' $(HARBOR_TASKS_FILE) 2>/dev/null | sed '/^$$/d')
+# 容器内 agent 二进制的输出目录。
+AGENT_DIST ?= bin/agent-dist
 
 build:
 	npm --prefix web ci && npm --prefix web run build
 	go build -o bin/euler ./cmd/euler
+
+# 交叉编译容器内运行的一次性 agent；容器可能是 amd64 或 arm64。
+agent-dist:
+	@mkdir -p $(AGENT_DIST)
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
+		-o $(AGENT_DIST)/euler-agent-linux-amd64 ./cmd/euler-agent
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
+		-o $(AGENT_DIST)/euler-agent-linux-arm64 ./cmd/euler-agent
 
 test:
 	go test ./...
@@ -48,50 +70,35 @@ dev-api:
 dev-web:
 	npm --prefix web run dev
 
-# 重建二进制并重启 Euler，健康检查通过后运行 Harbor 评测。
-# 默认跑完整编码评测；HARBOR_MODE=smoke 改为冒烟门禁。
+# 构建容器内 agent 二进制并运行 Harbor 评测；agent 在任务容器内直接执行，
+# 不需要宿主机 Euler 服务或工作区挂载。
 harbor-test:
 	@set -e; \
-		mkdir -p "$$(dirname '$(EULER_LOG)')"; \
-		echo "==> 重建 Euler 二进制"; \
-		go build -o bin/euler ./cmd/euler; \
-		echo "==> 重启 Euler 服务"; \
-		lsof -ti tcp:8080 | xargs kill 2>/dev/null || true; \
-		for i in $$(seq 1 10); do \
-			curl -sf --max-time 1 http://127.0.0.1:8080/health >/dev/null || break; \
-			sleep 1; \
-		done; \
-		if curl -sf --max-time 1 http://127.0.0.1:8080/health >/dev/null; then \
-			echo "  端口 8080 仍被占用，重启失败" >&2; \
-			exit 1; \
-		fi; \
 		if [ -z "$${LANGFUSE_SECRET_KEY:-}" ] && [ -f "$$HOME/.zprofile" ]; then \
 			set -a; . "$$HOME/.zprofile" >/dev/null 2>&1 || true; set +a; \
 		fi; \
-		EULER_DATABASE_URL='$(EULER_DATABASE_URL)' nohup \
-			./harbor_eval/scripts/start-euler.sh > '$(EULER_LOG)' 2>&1 & \
-		pid=$$!; \
-		for i in $$(seq 1 30); do \
-			if curl -sf --max-time 2 http://127.0.0.1:8080/health >/dev/null; then \
-				echo "  服务已就绪 (pid=$$pid)"; break; \
-			fi; \
-			if [ "$$i" -eq 30 ]; then \
-				echo "  服务启动超时，最近日志：" >&2; \
-				tail -n 20 '$(EULER_LOG)' >&2; \
-				exit 1; \
-			fi; \
-			sleep 1; \
-		done; \
-		echo "==> 运行 Harbor"; \
+		if [ -z "$${EULER_MODEL_API_KEY:-}" ] && [ -z "$${OPENAI_API_KEY:-}" ]; then \
+			echo "缺少模型密钥：请设置 EULER_MODEL_API_KEY 或 OPENAI_API_KEY" >&2; \
+			exit 1; \
+		fi; \
+		echo "==> 构建容器内 agent 二进制"; \
+		$(MAKE) agent-dist; \
 		export EULER_MODEL_BASE_URL='$(EULER_MODEL_BASE_URL)'; \
 		export EULER_MODEL='$(EULER_MODEL)'; \
 		export EULER_REASONING_EFFORT='$(EULER_REASONING_EFFORT)'; \
+		model_host=$$(printf '%s' '$(EULER_MODEL_BASE_URL)' | sed -E 's#^[a-z]+://##; s#/.*$$##'); \
+		allow_args="--allow-agent-host $$model_host"; \
+		langfuse_url="$${LANGFUSE_HOST:-$${LANGFUSE_BASE_URL:-}}"; \
+		if [ -n "$$langfuse_url" ]; then \
+			langfuse_host=$$(printf '%s' "$$langfuse_url" | sed -E 's#^[a-z]+://##; s#/.*$$##'); \
+			allow_args="$$allow_args --allow-agent-host $$langfuse_host"; \
+		fi; \
 		if [ "$${HARBOR_MODE:-multi}" = "smoke" ]; then \
 			./harbor_eval/scripts/run-smoke.sh; \
 		elif [ "$${HARBOR_MODE:-multi}" = "coding" ]; then \
 			./harbor_eval/scripts/run-coding.sh; \
 		else \
-			./harbor_eval/scripts/prepare-workspace.sh; \
+			echo "==> 运行 Harbor"; \
 			run_id=$$(date +%Y%m%d-%H%M%S); \
 			job_name="coding-multi-$$run_id"; \
 			results_dir="harbor_eval/results/$$run_id"; \
@@ -100,23 +107,39 @@ harbor-test:
 				echo "job_name: $$job_name"; \
 				echo "jobs_dir: harbor_eval/results"; \
 				echo "n_concurrent_trials: $(HARBOR_CONCURRENCY)"; \
-				echo "datasets:"; \
-				for ds in $(HARBOR_DATASETS); do \
-					echo "  - path: harbor_eval/tasks/_downloads/$$ds"; \
-					echo "    n_tasks: $(HARBOR_PER_DATASET)"; \
-				done; \
+				if [ -n "$(HARBOR_TASKS)" ]; then \
+					echo "tasks:"; \
+					for pick in $(HARBOR_TASKS); do \
+						echo "  - path: harbor_eval/tasks/_downloads/$$pick"; \
+					done; \
+				elif [ -n "$(HARBOR_SELECTED)" ]; then \
+					echo "tasks:"; \
+					for path in $(HARBOR_SELECTED); do \
+						echo "  - path: $$path"; \
+					done; \
+				else \
+					echo "datasets:"; \
+					for ds in $(HARBOR_DATASETS); do \
+						echo "  - path: harbor_eval/tasks/_downloads/$$ds"; \
+						echo "    n_tasks: $(HARBOR_PER_DATASET)"; \
+					done; \
+				fi; \
 				echo "agents:"; \
 				echo "  - import_path: agents.euler_agent:EulerAgent"; \
+				echo "    override_timeout_sec: $(HARBOR_AGENT_TIMEOUT)"; \
 				echo "environment:"; \
 				echo "  type: docker"; \
-				echo "  mounts:"; \
-				echo "    - type: bind"; \
-				echo "      source: /tmp/euler-harbor/workspaces"; \
-				echo "      target: /mnt/euler-workspaces"; \
 			} > "$$cfg"; \
-			echo "  数据集: $$(echo $(HARBOR_DATASETS) | wc -w | tr -d ' ') 个，每个 $(HARBOR_PER_DATASET) 个任务，并发 $(HARBOR_CONCURRENCY)"; \
+			if [ -n "$(HARBOR_TASKS)" ]; then \
+				echo "  任务: $(HARBOR_TASKS)，并发 $(HARBOR_CONCURRENCY)"; \
+			elif [ -n "$(HARBOR_SELECTED)" ]; then \
+				echo "  精选任务: $$(echo $(HARBOR_SELECTED) | wc -w | tr -d ' ') 个，每个 agent 上限 $(HARBOR_AGENT_TIMEOUT)s，并发 $(HARBOR_CONCURRENCY)"; \
+			else \
+				echo "  数据集: $$(echo $(HARBOR_DATASETS) | wc -w | tr -d ' ') 个，每个 $(HARBOR_PER_DATASET) 个任务，并发 $(HARBOR_CONCURRENCY)"; \
+			fi; \
 			PYTHONPATH="$$PWD/harbor_eval$${PYTHONPATH:+:$$PYTHONPATH}" \
-				harbor run -c "$$cfg" -y --job-name "$$job_name" -o "$$results_dir"; \
+				harbor run -c "$$cfg" -y $$allow_args \
+				--job-name "$$job_name" -o "$$results_dir"; \
 			job_dir="$$results_dir/$$job_name"; \
 			echo "==> 结果目录: $$job_dir"; \
 			find "$$job_dir" -name reward.txt -exec cat {} \; 2>/dev/null | \

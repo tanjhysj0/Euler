@@ -48,6 +48,9 @@ const (
 	statusRateLimited  = 429
 	statusServerError  = 500
 
+	// noRoundLimit 是轮次上限的“不设限”取值，此时只受运行时长约束。
+	noRoundLimit = 0
+
 	zeroTimeout time.Duration = 0
 )
 
@@ -88,6 +91,7 @@ func (f OpenAIChatModelFactory) New(
 
 // roundLimitedModel 限制 Generate 和 Stream 的调用次数，覆盖 ReAct 图通过
 // WithTools 派生的所有包装器；所有包装器共享同一个计数器。
+// max 小于等于 0 表示不设限，仅受运行时长约束。
 type roundLimitedModel struct {
 	base  model.ToolCallingChatModel
 	calls *atomic.Int64
@@ -131,7 +135,7 @@ func (m *roundLimitedModel) WithTools(
 
 func (m *roundLimitedModel) count(ctx context.Context) error {
 	used := m.calls.Add(singleModelCall)
-	if used > int64(m.max) {
+	if m.max > noRoundLimit && used > int64(m.max) {
 		// 预算在模型真正发起请求前就已耗尽，需要显式写入追踪才能与模型失败区分
 		tracing.RecordBudgetExhausted(ctx, int(used), m.max)
 		// 用带错误码的包装保留 errors.Is 语义，同时让 run 层记录可归因的失败原因

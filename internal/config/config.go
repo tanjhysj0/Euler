@@ -84,22 +84,9 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("home: %w", err)
 	}
-	cfg := Config{
-		Listen:        defaultListenAddr,
-		WorkspaceRoot: filepath.Join(home, "EulerWorkspaces"),
-		Agent: AgentLimits{
-			MaxModelRounds: defaultMaxRounds,
-			MaxToolCalls:   defaultMaxToolCalls,
-			MaxDuration:    defaultMaxDuration,
-			MaxOutputBytes: defaultMaxOutput,
-		},
-		ShellTimeout:         defaultShellTimeout,
-		ShellOutputBytes:     defaultShellOutput,
-		ModelTimeout:         defaultModelTimeout,
-		SystemPromptTemplate: defaultPrompt,
-		PreviewBytes:         defaultPreview,
-		Langfuse:             LangfuseConfig{Environment: defaultLangfuseEnv},
-	}
+	cfg := Default()
+	cfg.Listen = defaultListenAddr
+	cfg.WorkspaceRoot = filepath.Join(home, "EulerWorkspaces")
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Config{}, err
@@ -118,6 +105,34 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// Default 返回内置默认配置，不读取文件、环境或数据库地址。供没有服务端
+// 的一次性运行（例如容器内评测）复用同一套限额与超时默认值。
+func Default() Config {
+	return Config{
+		Listen: defaultListenAddr,
+		Agent: AgentLimits{
+			MaxModelRounds: defaultMaxRounds,
+			MaxToolCalls:   defaultMaxToolCalls,
+			MaxDuration:    defaultMaxDuration,
+			MaxOutputBytes: defaultMaxOutput,
+		},
+		ShellTimeout:         defaultShellTimeout,
+		ShellOutputBytes:     defaultShellOutput,
+		ModelTimeout:         defaultModelTimeout,
+		SystemPromptTemplate: defaultPrompt,
+		PreviewBytes:         defaultPreview,
+		Langfuse:             LangfuseConfig{Environment: defaultLangfuseEnv},
+	}
+}
+
+// LangfuseFromEnv 只从环境变量读取 Langfuse 配置，供没有配置文件的运行
+// 使用；未设置 host 时返回零值，表示关闭追踪。
+func LangfuseFromEnv() LangfuseConfig {
+	cfg := Config{Langfuse: LangfuseConfig{Environment: defaultLangfuseEnv}}
+	cfg.loadLangfuseEnv()
+	return cfg.Langfuse
 }
 
 func (c Config) validate() error {

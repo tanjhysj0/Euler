@@ -7,7 +7,3 @@ agents:
   - import_path: agents.euler_agent:EulerAgent
 environment:
   type: docker
-  mounts:
-    - type: bind
-      source: /tmp/euler-harbor/workspaces
-      target: /mnt/euler-workspaces

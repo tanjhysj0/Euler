@@ -1,38 +1,54 @@
-"""Harbor 外部 Agent：通过 HTTP 驱动宿主机 Euler。"""
+"""Harbor 外部 Agent：把 Euler 一次性二进制传入任务容器内直接执行。
+
+设计目标是让 agent 进程就跑在任务容器里：工作区就是容器的工作目录，
+验证器天然能看到产物，因此不再需要宿主机工作区映射或双向同步。
+"""
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
 import json
 import os
 import posixpath
-import re
 import shlex
-import subprocess
 from pathlib import Path
 
-import httpx
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from agents.euler_client import TERMINAL_EVENTS, EulerClient
-
-DEFAULT_BASE_URL = "http://127.0.0.1:8080"
-# 宿主机工作区根目录；每个 trial 在下面使用独立子目录，支持并发互不干扰。
-DEFAULT_WORKSPACES_ROOT = "/tmp/euler-harbor/workspaces"
-# 宿主机根目录在容器内的挂载点。刻意不使用 /app：任务镜像的原始文件通常
-# 位于 /app，若把宿主机目录挂到 /app 会覆盖它们，导致无法播种工作区。
-DEFAULT_HOST_MOUNTS_ROOT = "/mnt/euler-workspaces"
-APPROVAL_REASON = "euler-harbor"
-MAX_RECONNECTS = 3
-RECONNECT_DELAY_SECONDS = 1.0
-HEALTH_RETRIES = 30
-HEALTH_RETRY_DELAY_SECONDS = 1.0
-DANGEROUS_WORKDIRS = frozenset({"/", "/opt", "/mnt"})
-# 预算耗尽但工作区已有产出时按完成收尾，避免把已交付的结果记为异常
+# 仓库内交叉编译产物目录；可用 EULER_AGENT_DIST 覆盖。
+DEFAULT_DIST_DIR = Path(__file__).resolve().parents[2] / "bin" / "agent-dist"
+# 容器内的固定路径：放在 /tmp 下，避免污染任务工作区。
+REMOTE_DIR = "/tmp/euler"
+REMOTE_BINARY = f"{REMOTE_DIR}/euler-agent"
+REMOTE_INSTRUCTION = f"{REMOTE_DIR}/instruction.txt"
+REMOTE_RESULT = f"{REMOTE_DIR}/result.json"
+# 容器架构别名到构建产物后缀的映射。
+ARCH_ALIASES = {
+    "x86_64": "amd64",
+    "amd64": "amd64",
+    "aarch64": "arm64",
+    "arm64": "arm64",
+}
+DEFAULT_MODEL_BASE_URL = "https://api.deepseek.com"
+# 0 表示模型轮次不设限，只受 10 分钟工作时长约束。
+DEFAULT_MAX_ROUNDS = 0
+DEFAULT_MAX_TOOL_CALLS = 120
+DEFAULT_MAX_DURATION_SEC = 600
+# exec 需要比 agent 自身预算更宽松，才能拿到它写出的结果而不是先被终止
+EXEC_TIMEOUT_MARGIN_SEC = 120
+DANGEROUS_WORKDIRS = frozenset({"/", "/opt", "/mnt", "/tmp"})
 ROUND_LIMIT_CODE = "model_round_limit"
+# 常见的 Langfuse 环境变量名；容器内追踪与宿主机保持同一套配置。
+LANGFUSE_ENV_KEYS = (
+    "LANGFUSE_HOST",
+    "LANGFUSE_BASE_URL",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "EULER_LANGFUSE_HOST",
+    "EULER_LANGFUSE_PUBLIC_KEY",
+    "EULER_LANGFUSE_SECRET_KEY",
+)
 EXECUTION_GUIDANCE = (
     "执行约束：\n"
     "1. 开始前列出指令中的验收点，实现后用一条端到端命令逐项确认。\n"
@@ -46,11 +62,9 @@ EXECUTION_GUIDANCE = (
 )
 
 
-def build_instruction(instruction: str, workspace: str, workdir: str) -> str:
-    """把官方指令中的容器路径映射到宿主机工作区，并附加执行约束。"""
-    prefix = (
-        f"你的工作区目录是 {workspace}（原任务中的 {workdir} 对应此目录）。"
-    )
+def build_instruction(instruction: str, workdir: str) -> str:
+    """在工作区说明之外附加执行约束，保留原始指令在末尾。"""
+    prefix = f"你的工作区目录是 {workdir}，当前目录即该目录。"
     return f"{prefix}\n\n{EXECUTION_GUIDANCE}\n\n{instruction}"
 
 
@@ -64,83 +78,8 @@ def validate_workdir(workdir: str) -> str:
     return normalized
 
 
-def validate_mount(path: str) -> str:
-    """校验宿主机工作区在容器内的挂载点，拒绝空值、相对路径与危险根路径。"""
-    if not path or not path.startswith("/"):
-        raise ValueError(f"invalid mount path: {path!r}")
-    normalized = posixpath.normpath(path)
-    if normalized in DANGEROUS_WORKDIRS or not normalized.strip("/"):
-        raise ValueError(f"refusing dangerous mount path: {normalized!r}")
-    return normalized
-
-
-def validate_host_root(root: str) -> str:
-    """校验宿主机工作区根目录，拒绝空值、相对路径与危险根路径。"""
-    if not root or not root.startswith("/"):
-        raise ValueError(f"invalid host workspaces root: {root!r}")
-    normalized = posixpath.normpath(root)
-    if normalized in DANGEROUS_WORKDIRS or not normalized.strip("/"):
-        raise ValueError(f"refusing dangerous host workspaces root: {normalized!r}")
-    return normalized
-
-
-def validate_host_workspace(
-    path: str, root: str = DEFAULT_WORKSPACES_ROOT
-) -> str:
-    """校验宿主机工作区必须是根目录下的具体子目录，避免误用共享根。"""
-    if not path or not path.startswith("/"):
-        raise ValueError(f"invalid host workspace: {path!r}")
-    normalized = posixpath.normpath(path)
-    base = validate_host_root(root)
-    if not normalized.startswith(base + "/"):
-        raise ValueError(f"host workspace must be under {base}: {normalized!r}")
-    return normalized
-
-
-def _optional_int(value: str | None) -> int | None:
-    """把可选的环境变量解析为整数；非法值视为未声明。"""
-    if not value:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return None
-
-
-def _reconnect_delay(attempt: int) -> float:
-    """按连续失败次数指数退避，避免短时间内耗尽重连预算。"""
-    return RECONNECT_DELAY_SECONDS * (2 ** (attempt - 1))
-
-
-def git_baseline(workspace: str) -> None:
-    """在宿主机共享工作区建立 baseline commit。"""
-    commands = [
-        ["git", "-C", workspace, "init", "-q"],
-        ["git", "-C", workspace, "config", "user.name", "euler-harbor"],
-        ["git", "-C", workspace, "config", "user.email", "euler-harbor@local"],
-        ["git", "-C", workspace, "add", "-A"],
-        ["git", "-C", workspace, "commit", "-q", "--allow-empty", "-m", "baseline"],
-    ]
-    for command in commands:
-        subprocess.run(command, check=True, capture_output=True, text=True)
-
-
-def workspace_changed(workspace: str) -> bool:
-    """判断 baseline 之后工作区是否有改动；git 不可用时按有改动处理。"""
-    result = subprocess.run(
-        ["git", "-C", workspace, "status", "--porcelain"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        # 无法判定时不能误报 no_action
-        return True
-    return bool(result.stdout.strip())
-
-
 class EulerAgent(BaseAgent):
-    """把宿主机 Euler 包装成 Harbor 外部 Agent。"""
+    """把容器内运行的 Euler 一次性二进制包装成 Harbor Agent。"""
 
     @staticmethod
     def name() -> str:
@@ -148,56 +87,46 @@ class EulerAgent(BaseAgent):
 
     def __init__(self, logs_dir: Path, model_name: str | None = None, **kwargs):
         super().__init__(logs_dir=logs_dir, model_name=model_name, **kwargs)
-        self.base_url = os.environ.get("EULER_BASE_URL", DEFAULT_BASE_URL)
-        self.workspaces_root = os.environ.get(
-            "EULER_HARBOR_WORKSPACES", DEFAULT_WORKSPACES_ROOT
+        self.dist_dir = Path(
+            os.environ.get("EULER_AGENT_DIST", str(DEFAULT_DIST_DIR))
         )
-        self.host_mounts_root = os.environ.get(
-            "EULER_HOST_MOUNTS", DEFAULT_HOST_MOUNTS_ROOT
+        self.model = os.environ.get("EULER_MODEL") or self.model_name or ""
+        self.model_base_url = (
+            os.environ.get("EULER_MODEL_BASE_URL") or DEFAULT_MODEL_BASE_URL
         )
-        self.profile_id = os.environ.get("EULER_PROFILE_ID") or None
-        self.model_base_url = os.environ.get("EULER_MODEL_BASE_URL") or None
-        self.model = os.environ.get("EULER_MODEL") or None
-        self.secret_ref = os.environ.get("EULER_MODEL_KEY_ENV", "OPENAI_API_KEY")
-        self.agent_timeout = float(os.environ.get("EULER_AGENT_TIMEOUT", "840"))
+        self.reasoning_effort = os.environ.get("EULER_REASONING_EFFORT") or ""
         self.max_model_rounds = _optional_int(
-            os.environ.get("EULER_MAX_MODEL_ROUNDS")
+            os.environ.get("EULER_MAX_MODEL_ROUNDS"), DEFAULT_MAX_ROUNDS, allow_zero=True
         )
-        self.reasoning_effort = os.environ.get("EULER_REASONING_EFFORT") or None
+        self.max_tool_calls = _optional_int(
+            os.environ.get("EULER_MAX_TOOL_CALLS"), DEFAULT_MAX_TOOL_CALLS
+        )
+        self.max_duration_sec = _optional_int(
+            os.environ.get("EULER_MAX_DURATION_SEC"), DEFAULT_MAX_DURATION_SEC
+        )
+        self.api_key = (
+            os.environ.get("EULER_MODEL_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+            or ""
+        )
 
     def version(self) -> str:
-        return "0.1.0"
+        return "0.2.0"
 
     async def setup(self, environment: BaseEnvironment) -> None:
-        # 不用 async with：bootstrap 需要 cookie，而健康重试必须在 bootstrap 之前进行
-        client = EulerClient(self.base_url)
-        try:
-            await self._wait_health(client)
-        finally:
-            await client.aclose()
-
-    def _trial_key(self) -> str:
-        """用 trial 日志目录生成稳定的唯一子目录名，供并发隔离使用。"""
-        raw = str(self.logs_dir.resolve())
-        digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
-        name = re.sub(r"[^A-Za-z0-9._-]+", "-", self.logs_dir.name or "trial")
-        return f"{name}-{digest}"
-
-    def _workspace_for_trial(self) -> str:
-        """返回并创建本 trial 独占的宿主机工作区。"""
-        root = validate_host_root(self.workspaces_root)
-        workspace = validate_host_workspace(
-            posixpath.join(root, self._trial_key()), root
-        )
-        os.makedirs(workspace, exist_ok=True)
-        os.chmod(workspace, 0o777)
-        return workspace
-
-    def _mount_for_trial(self) -> str:
-        """返回本 trial 在容器内对应的挂载点。"""
-        return validate_mount(
-            posixpath.join(self.host_mounts_root, self._trial_key())
-        )
+        """检测容器架构，上传对应二进制并校验可执行。"""
+        arch = await self._detect_arch(environment)
+        binary = self._binary_path(arch)
+        result = await environment.exec(command=f"mkdir -p {REMOTE_DIR}")
+        if result.return_code != 0:
+            raise RuntimeError(f"create remote dir failed: {result.stderr}")
+        await environment.upload_file(binary, REMOTE_BINARY)
+        await self._chmod(environment)
+        check = await environment.exec(command=f"{shlex.quote(REMOTE_BINARY)} -version")
+        if check.return_code != 0:
+            raise RuntimeError(
+                f"euler-agent not runnable: {check.stderr or check.stdout}"
+            )
 
     async def run(
         self,
@@ -205,128 +134,77 @@ class EulerAgent(BaseAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
-        # 先计算并校验 trial 独占工作区，非法路径直接失败且不创建会话
-        workspace = self._workspace_for_trial()
-        mount = self._mount_for_trial()
-        workdir = await self._workdir(environment)
-        await self._seed_workspace(environment, workdir, mount)
-        git_baseline(workspace)
-        full_instruction = build_instruction(instruction, workspace, workdir)
-
-        async with EulerClient(self.base_url) as client:
-            profile_id = await client.ensure_profile(
-                self.profile_id,
-                self.model_base_url,
-                self.model,
-                self.secret_ref,
+        if not self.api_key:
+            raise RuntimeError(
+                "missing model api key: set EULER_MODEL_API_KEY or OPENAI_API_KEY"
             )
-            session_id = await client.create_session(profile_id, workspace)
-            run_id = await client.start_run(session_id, full_instruction)
-            run_finished = False
-            try:
-                try:
-                    await self._consume(client, run_id)
-                    snapshot = await client.snapshot(run_id)
-                except TimeoutError:
-                    raise RuntimeError("euler run timed out") from None
-                run_info = snapshot.get("run") or {}
-                status = run_info.get("status")
-                context.metadata = {
-                    "run_id": run_id,
-                    "session_id": session_id,
-                    "tool_calls": len(snapshot.get("tool_calls") or []),
-                    "approvals": len(snapshot.get("approvals") or []),
-                    "status": status,
-                    "outcome": "failed",
-                    "model": self.model,
-                    "max_model_rounds": self.max_model_rounds,
-                    "reasoning_effort": self.reasoning_effort,
-                }
-                if run_info.get("error_code"):
-                    context.metadata["error_code"] = run_info["error_code"]
-                if run_info.get("error_message"):
-                    context.metadata["error_message"] = run_info["error_message"]
-                if status == "succeeded":
-                    # 零工具调用且工作区无改动，属于空跑，单独标记为异常
-                    no_action = (
-                        context.metadata["tool_calls"] == 0
-                        and not workspace_changed(workspace)
-                    )
-                    context.metadata["outcome"] = (
-                        "no_action" if no_action else "completed"
-                    )
-                elif (
-                    run_info.get("error_code") == ROUND_LIMIT_CODE
-                    and workspace_changed(workspace)
-                ):
-                    # 轮次预算耗尽前已产生改动，视为完成交付而非失败
-                    context.metadata["outcome"] = "budget_exhausted"
-                await self._write_trace(
-                    client, environment, run_id, session_id, snapshot
-                )
-                if (
-                    status != "succeeded"
-                    and context.metadata["outcome"] != "budget_exhausted"
-                ):
-                    raise RuntimeError(f"euler run ended with status={status}")
-                run_finished = True
-            finally:
-                # 任何非终态退出（含外部取消/超时）都取消 run，避免孤儿 run 污染工作区；
-                # shield 保证取消请求不会被正在传播的取消信号打断
-                if not run_finished:
-                    await asyncio.shield(self._cancel(client, run_id))
-
-    async def _cancel(self, client: EulerClient, run_id: str) -> None:
-        """尽力取消 run；取消失败时保留原始异常。"""
-        try:
-            await client.cancel(run_id)
-        except Exception:
-            pass
-
-    async def _write_trace(
-        self,
-        client: EulerClient,
-        environment: BaseEnvironment,
-        run_id: str,
-        session_id: str,
-        snapshot: dict,
-    ) -> None:
-        """把 run 快照、对话与运行时信息落到 trial 日志目录，便于事后复盘。"""
-        trace: dict = {
-            "run_id": run_id,
-            "session_id": session_id,
-            "model": self.model,
-            "max_model_rounds": self.max_model_rounds,
-            "reasoning_effort": self.reasoning_effort,
-            "run": snapshot.get("run"),
-            "tool_calls": snapshot.get("tool_calls") or [],
-            "approvals": snapshot.get("approvals") or [],
-            "messages": [],
-        }
-        try:
-            trace["messages"] = await client.messages(session_id)
-        except Exception as exc:
-            # 轨迹拉取失败不影响评测结论，但必须留下失败原因
-            trace["messages_error"] = str(exc)
-        try:
-            version = await environment.exec(command="python3 --version")
-            trace["container_python"] = (version.stdout or "").strip()
-        except Exception as exc:
-            trace["container_python_error"] = str(exc)
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
-        path = self.logs_dir / "euler-trace.json"
-        path.write_text(
-            json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8"
+        if not self.model:
+            raise RuntimeError("missing model: set EULER_MODEL or pass -m")
+        workspace = validate_workdir(await self._workdir(environment))
+        await environment.exec(command=f"mkdir -p {REMOTE_DIR}")
+        local_instruction = self._write_instruction(
+            build_instruction(instruction, workspace)
         )
+        await environment.upload_file(local_instruction, REMOTE_INSTRUCTION)
+        command = shlex.join(
+            [
+                REMOTE_BINARY,
+                "-instruction-file",
+                REMOTE_INSTRUCTION,
+                "-dir",
+                workspace,
+                "-result",
+                REMOTE_RESULT,
+                "-max-rounds",
+                str(self.max_model_rounds),
+                "-max-tool-calls",
+                str(self.max_tool_calls),
+                "-max-duration",
+                f"{self.max_duration_sec}s",
+            ]
+        )
+        try:
+            result = await environment.exec(
+                command=command,
+                cwd=workspace,
+                env=self._exec_env(),
+                timeout_sec=self.max_duration_sec + EXEC_TIMEOUT_MARGIN_SEC,
+            )
+        except TimeoutError:
+            raise RuntimeError("euler agent timed out") from None
+        report = await self._download_report(environment)
+        context.metadata = self._metadata(report, workspace, result)
+        if report is None:
+            raise RuntimeError(
+                "euler-agent produced no result: "
+                f"{_tail(result.stderr or result.stdout)}"
+            )
 
-    async def _wait_health(self, client: EulerClient) -> None:
-        for _ in range(HEALTH_RETRIES):
-            try:
-                await client.health()
-                return
-            except Exception:
-                await asyncio.sleep(HEALTH_RETRY_DELAY_SECONDS)
-        raise RuntimeError("euler health check failed")
+    async def _detect_arch(self, environment: BaseEnvironment) -> str:
+        """读取容器架构并映射为构建产物后缀。"""
+        result = await environment.exec(command="uname -m")
+        if result.return_code != 0:
+            raise RuntimeError(f"detect arch failed: {result.stderr}")
+        raw = (result.stdout or "").strip().splitlines()
+        arch = ARCH_ALIASES.get(raw[-1].strip() if raw else "")
+        if arch is None:
+            raise RuntimeError(f"unsupported container arch: {raw!r}")
+        return arch
+
+    def _binary_path(self, arch: str) -> Path:
+        """返回指定架构的本地二进制；缺失时给出构建提示。"""
+        binary = self.dist_dir / f"euler-agent-linux-{arch}"
+        if not binary.is_file():
+            raise RuntimeError(
+                f"missing agent binary {binary}; run `make agent-dist` first"
+            )
+        return binary
+
+    async def _chmod(self, environment: BaseEnvironment) -> None:
+        quoted = shlex.quote(REMOTE_BINARY)
+        result = await environment.exec(command=f"chmod +x {quoted}")
+        if result.return_code != 0:
+            raise RuntimeError(f"chmod agent failed: {result.stderr}")
 
     async def _workdir(self, environment: BaseEnvironment) -> str:
         result = await environment.exec(command="pwd")
@@ -334,61 +212,99 @@ class EulerAgent(BaseAgent):
             raise RuntimeError(f"pwd failed: {result.stderr}")
         return (result.stdout or "").strip()
 
-    async def _seed_workspace(
-        self, environment: BaseEnvironment, workdir: str, mount: str
-    ) -> None:
-        # 任务原始文件仍在镜像的 workdir 中（挂载点已移到独立目录），
-        # 因此直接从 workdir 复制到本 trial 的挂载点。
-        source = validate_workdir(workdir)
-        target = validate_mount(mount)
-        if source == target:
-            raise ValueError("host mount must differ from task workdir")
-        quoted_source = shlex.quote(source)
-        quoted_target = shlex.quote(target)
-        await environment.exec(command=f"mkdir -p {quoted_target}")
-        await environment.exec(
-            command=(
-                f"rm -rf {quoted_target}/* {quoted_target}/.[!.]* "
-                "2>/dev/null || true"
-            )
-        )
-        result = await environment.exec(
-            command=f"cp -a {quoted_source}/. {quoted_target}/"
-        )
-        if result.return_code != 0:
-            raise RuntimeError(
-                f"seed workspace failed: {result.stderr or result.stdout}"
-            )
-        result = await environment.exec(command=f"chmod -R a+rwX {quoted_target}")
-        if result.return_code != 0:
-            raise RuntimeError(f"chmod workspace failed: {result.stderr}")
+    def _write_instruction(self, text: str) -> Path:
+        """把完整指令写到 trial 日志目录，便于事后复盘与上传。"""
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        path = self.logs_dir / "instruction.txt"
+        path.write_text(text, encoding="utf-8")
+        return path
 
-    async def _consume(self, client: EulerClient, run_id: str) -> None:
-        last_seq = 0
-        failures = 0
-        async with asyncio.timeout(self.agent_timeout):
-            while True:
-                error: Exception | None = None
-                try:
-                    async for event in client.events(run_id, after=last_seq):
-                        # 收到任意事件即重置连续失败计数
-                        failures = 0
-                        last_seq = event.seq
-                        if event.type == "approval.requested":
-                            approval_id = str(event.payload.get("approval_id", ""))
-                            if approval_id:
-                                await client.decide(
-                                    approval_id, True, APPROVAL_REASON
-                                )
-                        if event.type in TERMINAL_EVENTS:
-                            return
-                except (httpx.TransportError, httpx.ReadTimeout) as exc:
-                    error = exc
-                failures += 1
-                if failures > MAX_RECONNECTS:
-                    if error is not None:
-                        raise RuntimeError("euler event stream failed") from error
-                    raise RuntimeError(
-                        "euler event stream ended without terminal event"
-                    ) from None
-                await asyncio.sleep(_reconnect_delay(failures))
+    def _exec_env(self) -> dict[str, str]:
+        """组装容器内进程需要的环境变量；空值不传，避免覆盖默认。"""
+        values = {
+            "EULER_MODEL": self.model,
+            "EULER_MODEL_BASE_URL": self.model_base_url,
+            "EULER_MODEL_API_KEY": self.api_key,
+            "EULER_REASONING_EFFORT": self.reasoning_effort,
+        }
+        values.update(
+            {key: os.environ.get(key, "") for key in LANGFUSE_ENV_KEYS}
+        )
+        return {key: value for key, value in values.items() if value}
+
+    async def _download_report(
+        self, environment: BaseEnvironment
+    ) -> dict | None:
+        """下载并解析结果 JSON；未生成或不可解析时返回 None。"""
+        target = self.logs_dir / "result.json"
+        try:
+            await environment.download_file(REMOTE_RESULT, target)
+        except Exception:
+            return None
+        try:
+            return json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def _metadata(
+        self, report: dict | None, workspace: str, result: object
+    ) -> dict:
+        """把运行结果映射为 trial 元数据，失败也保留可定位的信息。"""
+        metadata = {
+            "agent": "euler",
+            "model": self.model,
+            "workspace": workspace,
+            "max_model_rounds": self.max_model_rounds,
+            "max_tool_calls": self.max_tool_calls,
+            "exit_code": getattr(result, "return_code", None),
+            "outcome": "failed",
+        }
+        if report is None:
+            metadata["error_message"] = _tail(
+                getattr(result, "stderr", "") or getattr(result, "stdout", "")
+            )
+            return metadata
+        metadata.update(
+            {
+                "status": report.get("status"),
+                "duration_ms": report.get("duration_ms"),
+                "tool_calls": len(report.get("tool_calls") or []),
+                "output_chars": len(report.get("output") or ""),
+            }
+        )
+        if report.get("error_code"):
+            metadata["error_code"] = report["error_code"]
+        if report.get("error"):
+            metadata["error_message"] = report["error"]
+        if report.get("status") == "succeeded":
+            # 零工具调用的成功属于空跑，单独标记便于筛查
+            metadata["outcome"] = (
+                "no_action" if not report.get("tool_calls") else "completed"
+            )
+        elif report.get("error_code") == ROUND_LIMIT_CODE:
+            metadata["outcome"] = "budget_exhausted"
+        return metadata
+
+
+def _optional_int(
+    value: str | None, fallback: int, *, allow_zero: bool = False
+) -> int:
+    """把可选环境变量解析为整数；非法值回退到默认值。
+
+    allow_zero 为真时接受 0（例如轮次上限用 0 表示不设限）。
+    """
+    if not value:
+        return fallback
+    try:
+        parsed = int(value)
+    except ValueError:
+        return fallback
+    if parsed > 0 or (allow_zero and parsed == 0):
+        return parsed
+    return fallback
+
+
+def _tail(text: str, limit: int = 800) -> str:
+    """截取输出末尾，避免把整段日志塞进元数据。"""
+    text = (text or "").strip()
+    return text if len(text) <= limit else "..." + text[-limit:]

@@ -111,8 +111,12 @@ func NewRuntime(deps Deps) *Runtime {
 }
 
 const (
-	messageCompleted  = "completed"
-	maxStepHeadroom   = 10
+	messageCompleted = "completed"
+	maxStepHeadroom  = 10
+	// 每一轮模型调用在 ReAct 图里对应模型与工具两个步数。
+	stepsPerRound = 2
+	// 轮次不设限时 ReAct 图仍需一个步数上限，取足够大的值由运行时长兜底。
+	unlimitedMaxSteps = 10000
 	noToolCalls       = 0
 	lastMessageOffset = 1
 
@@ -285,12 +289,17 @@ func (rt *Runtime) buildAgent(
 	) (bool, error) {
 		return streamHasToolCalls(ctx, stream, writer)
 	}
+	maxStep := rt.deps.Limits.MaxModelRounds*stepsPerRound + maxStepHeadroom
+	if rt.deps.Limits.MaxModelRounds <= noRoundLimit {
+		// 轮次不设限时用固定的步数上限，真正约束来自运行时长
+		maxStep = unlimitedMaxSteps
+	}
 	reactAgent, err := react.NewAgent(ctx, &react.AgentConfig{
 		ToolCallingModel: limited,
 		ToolsConfig: compose.ToolsNodeConfig{
 			Tools: built, ExecuteSequentially: true,
 		},
-		MaxStep:               rt.deps.Limits.MaxModelRounds*2 + maxStepHeadroom,
+		MaxStep:               maxStep,
 		StreamToolCallChecker: checker,
 		// submit 是模型显式收尾的信号：工具执行后直接结束，不再进入下一轮模型调用
 		ToolReturnDirectly: map[string]struct{}{tools.SubmitToolName(): {}},
