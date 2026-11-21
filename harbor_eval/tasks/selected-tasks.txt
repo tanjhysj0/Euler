@@ -1,8 +1,28 @@
-# 精选评测任务：轻量、可在本机 Docker Desktop（arm64 / 4 CPU）上稳定运行。
+# 精选评测任务：arm64 原生可运行、无长编译/长验证的快速回归集。
 # 每行一个仓库相对路径；用 `make harbor-test` 时默认读取本文件。
-# 当前集合全部为已验证可通过的任务，用于快速回归门禁（约 5-6 分钟）。
+# 筛选标准：
+#   1. 镜像必须支持 linux/arm64；本机是 arm64 Docker Desktop（4 核 / 4GB）。
+#      LiteCoder-rl 抽样镜像仅有 amd64，直接排除。
+#   2. 排除编译型任务：swe-gen-cpp/go/java/js/rust、algotune、binary-audit；
+#      aider-polyglot 只保留 python 子集，排除 cpp/go/rust 等变体。
+#   3. 排除重资源或长验证任务：programbench（12 核）、android-bench、
+#      devopsgym、tb3-preview-v2、terminal-bench-3-test、swe-marathon、
+#      bigcodebench-hard-complete、mimo-v26-code。
+#   4. 仅保留本地实测通过、单次 5 分钟内完成的任务（下方 10 个均已验证）。
+# 已尝试但未纳入：tb21-file-recovery 中 db-wal-recovery、regex-log、
+# log-summary-date-ranges、gcode-to-text、extract-elf、
+# multi-source-data-merger 未通过，其余 3 个未测试；tb21-code-debug 的
+# fix-git、git-leak-recovery 未通过；aider-polyglot/polyglot_python_book-store
+# 未通过。
+# 注意：headless-terminal 的 test_background_commands 偶发失败（服务未启动），
+# 属于任务/模型波动，复跑可通过。
 harbor_eval/tasks/_downloads/humanevalfix/python-0
 harbor_eval/tasks/_downloads/humanevalfix/python-1
+harbor_eval/tasks/_downloads/humanevalfix/python-2
+harbor_eval/tasks/_downloads/humanevalfix/python-3
+harbor_eval/tasks/_downloads/humanevalfix/python-4
+harbor_eval/tasks/_downloads/humanevalfix/python-5
 harbor_eval/tasks/_downloads/aider-polyglot/polyglot_python_affine-cipher
+harbor_eval/tasks/_downloads/aider-polyglot/polyglot_python_beer-song
 harbor_eval/tasks/_downloads/tb21-code-debug/headless-terminal
 harbor_eval/tasks/cancel-async-tasks
