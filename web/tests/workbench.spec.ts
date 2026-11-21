@@ -1,69 +1,245 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
-test('自动工作区、流式对话、文件审批与产物预览', async ({ page }) => {
-    await page.goto('/settings')
-    await page.getByRole('button', { name: '新建模型配置' }).click()
-    await page.getByLabel('名称').fill('本地模拟模型')
-    await page.getByLabel('Base URL').fill('http://127.0.0.1:18081/v1')
-    await page.getByLabel('模型', { exact: true }).fill('euler-e2e')
-    await page.getByRole('radio', { name: '环境变量' }).click()
-    await page.getByLabel('环境变量名').fill('EULER_TEST_MODEL_KEY')
-    await page.getByRole('button', { name: '保存' }).click()
+const PROFILE_NAME = '本地模拟模型'
+const ALT_PROFILE_NAME = '备用模拟模型'
 
-    await page.goto('/')
-    await page.getByRole('button', { name: '新建会话' }).click()
-    await expect(page.getByText(/将自动创建默认工作区/)).toBeVisible()
-    await page.getByRole('button', { name: '创建会话' }).click()
-    await page.getByPlaceholder('输入消息').fill('创建验收文档')
-    await page.getByRole('button', { name: '发送' }).click()
+// ensureProfile 幂等创建 E2E 模型配置：指向本地 mock，密钥走环境变量引用。
+async function ensureProfile(page: Page, name = PROFILE_NAME) {
+  await page.goto('/settings')
+  if (await page.getByText(name).count()) {
+    return
+  }
+  await page.getByRole('button', { name: '新建模型配置' }).click()
+  await page.getByLabel('名称').fill(name)
+  await page.getByLabel('Base URL').fill('http://127.0.0.1:18081/v1')
+  await page.getByLabel('模型', { exact: true }).fill('euler-e2e')
+  await page.getByRole('radio', { name: '环境变量' }).click()
+  await page.getByLabel('环境变量名').fill('EULER_TEST_MODEL_KEY')
+  await page.getByRole('button', { name: '保存' }).click()
+  await expect(page.getByText(name)).toBeVisible()
+}
 
-    await expect(page.getByText('file_write').first()).toBeVisible()
-    await expect(page.getByText('note.txt')).toBeVisible()
-    await page.reload()
-    await expect(page.getByRole('button', { name: '批准' })).toBeVisible()
-    await page.getByRole('button', { name: '批准' }).click()
-    await expect(page.getByText(/可以在右侧预览/)).toBeVisible()
-    await page.getByRole('button', { name: '文件', exact: true }).click()
-    await page.getByRole('treeitem', { name: 'note.txt' }).click()
-    await expect(page.locator('pre')).toContainText('# Euler 验收')
+// newSession 新建一个使用默认自动工作区的会话，并等待输入框就绪。
+async function newSession(page: Page) {
+  await page.goto('/')
+  await page.getByRole('button', { name: '新建会话' }).click()
+  await page.getByRole('button', { name: '创建会话' }).click()
+  await expect(page.getByPlaceholder('输入消息')).toBeVisible()
+}
+
+async function send(page: Page, text: string) {
+  await page.getByPlaceholder('输入消息').fill(text)
+  await page.getByRole('button', { name: '发送' }).click()
+}
+
+test('自动工作区、工具执行与产物预览', async ({ page }) => {
+  await ensureProfile(page)
+  await newSession(page)
+  await send(page, '创建验收文档')
+
+  // 工具执行完成后时间线展示工具名、成功状态与结果，Run 进入已完成。
+  await expect(page.getByText('file_write').first()).toBeVisible()
+  await expect(page.getByText('成功').first()).toBeVisible()
+  await expect(page.getByText('已完成')).toBeVisible()
+  await expect(page.getByText(/可以在右侧预览/)).toBeVisible()
+
+  // 右侧文件区默认常驻，直接展示工作区文件树。
+  await expect(page.getByRole('treeitem', { name: 'note.txt' })).toBeVisible()
+  await page.getByRole('treeitem', { name: 'note.txt' }).click()
+  await expect(page.locator('pre')).toContainText('# Euler 验收')
+
+  // 刷新后历史消息、工具时间线与产物依旧可恢复。
+  await page.reload()
+  await expect(page.getByText('file_write').first()).toBeVisible()
+  await expect(page.getByRole('treeitem', { name: 'note.txt' })).toBeVisible()
+  await page.getByRole('treeitem', { name: 'note.txt' }).click()
+  await expect(page.locator('pre')).toContainText('# Euler 验收')
 })
 
 test('慢速流刷新无重复，停止后已取消且刷新保持一致', async ({ page }) => {
-    await page.goto('/settings')
-    await page.getByRole('button', { name: '新建模型配置' }).click()
-    await page.getByLabel('名称').fill('慢速模拟模型')
-    await page.getByLabel('Base URL').fill('http://127.0.0.1:18081/v1')
-    await page.getByLabel('模型', { exact: true }).fill('euler-e2e')
-    await page.getByRole('radio', { name: '环境变量' }).click()
-    await page.getByLabel('环境变量名').fill('EULER_TEST_MODEL_KEY')
-    await page.getByRole('button', { name: '保存' }).click()
+  await ensureProfile(page)
+  await newSession(page)
+  await send(page, '持续输出')
+  await expect(page.locator('body')).toContainText('片段[0001]')
+  await expect(page.locator('body')).toContainText('片段[0005]')
 
-    await page.goto('/')
-    await page.getByRole('button', { name: '新建会话' }).click()
-    await page.getByRole('button', { name: '创建会话' }).click()
-    await page.getByPlaceholder('输入消息').fill('持续输出')
-    await page.getByRole('button', { name: '发送' }).click()
-    await expect(page.locator('body')).toContainText('片段[0001]')
-    await expect(page.locator('body')).toContainText('片段[0005]')
+  // slow 流期间刷新：恢复的文本来自权威 content + 事件回放，不得重复。
+  await page.reload()
+  await expect(page.locator('body')).toContainText('片段[0005]')
+  const text = await page.locator('body').innerText()
+  const chunks = text.match(/片段\[\d{4}\]/g) ?? []
+  expect(chunks.length).toBeGreaterThan(0)
+  expect(new Set(chunks).size).toBe(chunks.length)
 
-    // slow 流期间刷新：恢复的文本来自权威 content + 事件回放，不得重复。
-    await page.reload()
-    await expect(page.locator('body')).toContainText('片段[0005]')
-    const text = await page.locator('body').innerText()
-    const chunks = text.match(/片段\[\d{4}\]/g) ?? []
-    expect(chunks.length).toBeGreaterThan(0)
-    expect(new Set(chunks).size).toBe(chunks.length)
+  await page.getByRole('button', { name: '停止' }).click()
+  await page.getByRole('button', { name: '确认停止' }).click()
+  await expect(page.getByText('已取消')).toBeVisible()
+  const cancelledText = await page.getByText('助手', { exact: true }).locator('..').innerText()
 
-    await page.getByRole('button', { name: '停止' }).click()
-    await page.getByRole('button', { name: '确认停止' }).click()
-    await expect(page.getByText('已取消')).toBeVisible()
-    const cancelledText = await page.getByText('助手', { exact: true }).locator('..').innerText()
+  // 刷新后 Run 状态与助手消息文本必须与停止时一致。
+  // 两侧都用 innerText 比较：toHaveText 基于 textContent，不含布局换行。
+  await page.reload()
+  await expect(page.getByText('已取消')).toBeVisible()
+  await expect
+    .poll(() => page.getByText('助手', { exact: true }).locator('..').innerText())
+    .toBe(cancelledText)
+})
 
-    // 刷新后 Run 状态与助手消息文本必须与停止时一致。
-    // 两侧都用 innerText 比较：toHaveText 基于 textContent，不含布局换行。
-    await page.reload()
-    await expect(page.getByText('已取消')).toBeVisible()
-    await expect
-        .poll(() => page.getByText('助手', { exact: true }).locator('..').innerText())
-        .toBe(cancelledText)
+test('取消后可以立即发起新的 Run', async ({ page }) => {
+  await ensureProfile(page)
+  await newSession(page)
+  await send(page, '持续输出')
+  await expect(page.locator('body')).toContainText('片段[0001]')
+
+  await page.getByRole('button', { name: '停止' }).click()
+  await page.getByRole('button', { name: '确认停止' }).click()
+  await expect(page.getByText('已取消')).toBeVisible()
+
+  // 取消后输入区恢复可用，新 Run 不受上一条终态 Run 影响。
+  await send(page, '快速完成')
+  await expect(page.getByText('已完成')).toBeVisible()
+  await expect(page.getByText('快速完成。', { exact: true })).toBeVisible()
+})
+
+test('模型 5xx 错误展示失败状态与错误信息', async ({ page }) => {
+  await ensureProfile(page)
+  await newSession(page)
+  await send(page, '触发模型错误')
+
+  await expect(page.getByText('失败').first()).toBeVisible()
+  const alert = page.getByRole('alert')
+  await expect(alert).toBeVisible()
+  await expect(alert).toContainText('500')
+})
+
+test('工具执行失败在时间线展示错误结果', async ({ page }) => {
+  await ensureProfile(page)
+  await newSession(page)
+  await send(page, '读取缺失文件')
+
+  await expect(page.getByText('file_read').first()).toBeVisible()
+  await expect(page.getByText('失败').first()).toBeVisible()
+  await expect(page.getByText(/file_not_found/).first()).toBeVisible()
+  // 工具失败是模型可观察到的结果，Run 本身仍能正常收尾。
+  await expect(page.getByText('读取失败，任务结束。')).toBeVisible()
+  await expect(page.getByText('已完成')).toBeVisible()
+})
+
+test('单轮写入多个文件后文件树可分别预览', async ({ page }) => {
+  await ensureProfile(page)
+  await newSession(page)
+  await send(page, '创建多个文件')
+
+  await expect(page.getByText('file_write')).toHaveCount(2)
+  await expect(page.getByText('已创建两个文件。')).toBeVisible()
+  await expect(page.getByText('已完成')).toBeVisible()
+
+  await expect(page.getByRole('treeitem', { name: 'a.txt' })).toBeVisible()
+  await page.getByRole('treeitem', { name: 'a.txt' }).click()
+  await expect(page.locator('pre')).toContainText('alpha-content')
+  await page.getByRole('treeitem', { name: 'b.txt' }).click()
+  await expect(page.locator('pre')).toContainText('beta-content')
+})
+
+test('右侧文件树支持目录点击展开与收起', async ({ page }) => {
+  await ensureProfile(page)
+  await newSession(page)
+  await send(page, '创建嵌套文件')
+
+  await expect(page.getByText('已完成')).toBeVisible()
+  const directory = page.getByRole('treeitem', { name: 'src' })
+  await expect(directory).toBeVisible()
+  await expect(page.getByRole('treeitem', { name: 'main.go' })).toBeVisible()
+
+  // 点击目录收起子项，再次点击恢复。
+  await directory.click()
+  await expect(page.getByRole('treeitem', { name: 'main.go' })).toHaveCount(0)
+  await directory.click()
+  const file = page.getByRole('treeitem', { name: 'main.go' })
+  await expect(file).toBeVisible()
+
+  await file.click()
+  await expect(page.locator('pre')).toContainText('package main')
+})
+
+test('思考过程以折叠区展示并保留到 Run 完成', async ({ page }) => {
+  await ensureProfile(page)
+  await newSession(page)
+  await send(page, '展示思考')
+
+  // Run 完成后正文可见，思考过程折叠区仍保留，展开可读。
+  await expect(page.getByText('思考完成，结论如下。')).toBeVisible()
+  await expect(page.getByText('已完成')).toBeVisible()
+  const reasoning = page.locator('.reasoning-block')
+  await expect(reasoning).toBeVisible()
+  await expect(reasoning.locator('summary')).toHaveText('思考过程')
+  await reasoning.locator('summary').click()
+  await expect(reasoning.locator('.reasoning-text')).toContainText('先分析任务，再给出结论。')
+})
+
+test('历史中的空助手消息不会导致下一轮 400', async ({ page }) => {
+  await ensureProfile(page)
+  await newSession(page)
+  // 第一轮只调用 submit、没有正文，产生一条 content 为空的助手消息。
+  await send(page, '提交空总结')
+  await expect(page.getByText('已完成')).toBeVisible()
+
+  // 第二轮会把历史发给模型；mock 按 DeepSeek 规则拒绝空助手消息，
+  // 加载历史时必须过滤掉它，否则这里会失败。
+  await send(page, '快速完成')
+  await expect(page.getByText('快速完成。', { exact: true })).toBeVisible()
+  await expect(page.getByText('失败')).toHaveCount(0)
+})
+
+test('新建会话时可以切换模型配置并生效', async ({ page }) => {
+  await ensureProfile(page)
+  await ensureProfile(page, ALT_PROFILE_NAME)
+  await page.goto('/')
+  await page.getByRole('button', { name: '新建会话' }).click()
+  // antd Select 的下拉挂在 body 的 portal 中；只点当前可见的下拉容器。
+  await page.getByRole('combobox').click()
+  const dropdown = page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)')
+  await dropdown.getByText(ALT_PROFILE_NAME, { exact: true }).click()
+  await page.getByRole('button', { name: '创建会话' }).click()
+
+  await expect(page.getByPlaceholder('输入消息')).toBeVisible()
+  // 会话头部展示所选模型，确认选择确实提交到了后端。
+  await expect(page.getByText(ALT_PROFILE_NAME)).toBeVisible()
+})
+
+test('连续新建的会话自动分配不同工作区', async ({ page }) => {
+  await ensureProfile(page)
+  await newSession(page)
+  const firstPath = await page
+    .locator('code', { hasText: '/euler-e2e-workspaces/' })
+    .innerText()
+  await newSession(page)
+  const secondPath = await page
+    .locator('code', { hasText: '/euler-e2e-workspaces/' })
+    .innerText()
+  expect(secondPath).not.toBe(firstPath)
+})
+
+test('多会话创建、搜索过滤与切换', async ({ page }) => {
+  await ensureProfile(page)
+  await page.goto('/')
+  const items = page.locator('.session-sidebar-item')
+  await expect(page.locator('.session-sidebar-list')).toBeVisible()
+  const before = await items.count()
+
+  await newSession(page)
+  await page.getByRole('button', { name: '新建会话' }).click()
+  await page.getByRole('button', { name: '创建会话' }).click()
+  await expect(items).toHaveCount(before + 2)
+
+  // 搜索只保留匹配标题的会话。
+  const title = (await items.first().innerText()).split('\n')[0].trim()
+  await page.getByPlaceholder('搜索标题或路径').fill(title)
+  await expect(items).toHaveCount(1)
+  await page.getByPlaceholder('搜索标题或路径').fill('')
+  await expect(items).toHaveCount(before + 2)
+
+  // 点击侧栏项切换会话，右侧对话面板随之加载。
+  await items.first().click()
+  await expect(page.getByPlaceholder('输入消息')).toBeVisible()
 })

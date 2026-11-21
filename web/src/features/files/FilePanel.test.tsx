@@ -67,6 +67,16 @@ describe('FilePanel', () => {
     expect(screen.getByText('hello world').tagName).toBe('PRE')
   })
 
+  it('点击目录收起子项，再次点击展开子项', async () => {
+    renderWithProviders(<FilePanel workspaceId="w1" />)
+    expect(await screen.findByText('guide.md')).toBeVisible()
+    fireEvent.click(screen.getByText('docs'))
+    await waitFor(() => expect(screen.queryByText('guide.md')).not.toBeInTheDocument())
+    fireEvent.click(screen.getByText('docs'))
+    // antd Tree 展开动画在 jsdom 中不会推进，断言节点重新挂载即可。
+    await waitFor(() => expect(screen.queryByText('guide.md')).toBeInTheDocument())
+  })
+
   it('超出预览大小限制时展示错误与下载链接', async () => {
     renderWithProviders(<FilePanel workspaceId="w1" />)
     fireEvent.click(await screen.findByText('big.txt'))

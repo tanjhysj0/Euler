@@ -58,6 +58,10 @@ func serve(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("create local auth: %w", err)
 	}
+	// 启动即校验工作区根目录可创建、可写，避免创建会话时才暴露权限问题。
+	if err = workspace.NewService(cfg.WorkspaceRoot).EnsureRoot(); err != nil {
+		return fmt.Errorf("prepare workspace root: %w", err)
+	}
 	if err = persistence.Migrate(cfg.DatabaseURL); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}

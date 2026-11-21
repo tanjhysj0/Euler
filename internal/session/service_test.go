@@ -23,6 +23,22 @@ const testDatabaseURLEnv = "TEST_DATABASE_URL"
 
 var testProfileID = uuid.MustParse("6f3c1d52-9a0b-4d3e-8f21-2b7c5d4e1a90")
 
+// 空路径时每个会话自动分配独立目录，当前版本保持“一目录一会话”；
+// 未来多会话共享同一目录时改用显式 Path（复用逻辑已在下方用例覆盖）。
+func TestCreateSessionAutoAllocatesUniqueWorkspaces(t *testing.T) {
+	svc, _ := newSessionServiceForTest(t)
+	first, err := svc.Create(context.Background(), CreateInput{ProfileID: testProfileID})
+	require.NoError(t, err)
+	second, err := svc.Create(context.Background(), CreateInput{ProfileID: testProfileID})
+	require.NoError(t, err)
+	require.NotEqual(t, first.Workspace.ID, second.Workspace.ID)
+	require.NotEqual(t, first.Workspace.Path, second.Workspace.Path)
+	require.DirExists(t, first.Workspace.Path)
+	require.DirExists(t, second.Workspace.Path)
+	require.False(t, first.WorkspaceWarning)
+	require.False(t, second.WorkspaceWarning)
+}
+
 func TestCreateSessionReusesWorkspacePath(t *testing.T) {
 	svc, db := newSessionServiceForTest(t)
 	dir := t.TempDir()

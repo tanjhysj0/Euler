@@ -9,6 +9,8 @@ const configDir = path.dirname(fileURLToPath(import.meta.url))
 // Go 服务 cwd 固定为仓库根目录，保证 file://migrations 始终可解析。
 export default defineConfig({
   testDir: './tests',
+  // 真实模型冒烟需要密钥且会调用外部服务，单独由 playwright.real.config.ts 运行。
+  testIgnore: /real-model\.spec\.ts/,
   workers: 1,
   timeout: 60_000,
   globalSetup: './tests/global-setup.ts',

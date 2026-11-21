@@ -37,15 +37,16 @@ const connectionLabels: Record<ConnectionStatus, string> = {
 }
 
 // ChatPanel 组合消息列表、工具时间线与输入区；权威数据来自 REST 快照，
-// SSE 增量只用于 streaming 展示。刷新恢复：取最后一条非 completed 消息的 run_id，
-// cancelled/interrupted 等终态也要恢复 Run 状态标签。
+// SSE 增量只用于 streaming 展示。刷新恢复以最后一条带 run_id 的消息为准，
+// 终态 Run 也要恢复快照以展示工具时间线与错误信息。
 export default function ChatPanel({ session }: ChatPanelProps) {
   const queryClient = useQueryClient()
   const messagesQuery = useMessages(session.id)
   const messages = messagesQuery.data ?? []
-  const restoreRunId =
-    [...messages].reverse().find((message) => message.run_id && message.status !== 'completed')
-      ?.run_id ?? undefined
+  // 刷新恢复：只按最后一条带 run_id 的消息找回 Run。取最后一条本身即可
+  // 避免更早的 cancelled/interrupted 消息覆盖后续 Run 的状态。
+  const lastRunMessage = [...messages].reverse().find((message) => message.run_id)
+  const restoreRunId = lastRunMessage?.run_id ?? undefined
   const [runId, setRunId] = useState<string | undefined>(restoreRunId)
   // 渲染期比较上一次值来同步 state（React 推荐模式），避免 effect 级联渲染。
   const [prevRestoreRunId, setPrevRestoreRunId] = useState<string | undefined>(restoreRunId)
@@ -62,6 +63,7 @@ export default function ChatPanel({ session }: ChatPanelProps) {
   const draft = useRunStore((state) => state.drafts[session.id] ?? '')
   const connection = useRunStore((state) => state.connection)
   const deltas = useRunStore((state) => state.deltas)
+  const reasoning = useRunStore((state) => state.reasoning)
   const setDraft = useRunStore((state) => state.setDraft)
 
   const startRun = useStartRun(session.id)
@@ -139,7 +141,7 @@ export default function ChatPanel({ session }: ChatPanelProps) {
       {messagesQuery.isPending ? (
         <Empty description="加载消息中…" />
       ) : (
-        <MessageList messages={messages} deltas={deltas} />
+        <MessageList messages={messages} deltas={deltas} reasoning={reasoning} />
       )}
       <ToolTimeline snapshot={snapshot} onDecide={onDecide} />
       <Input.TextArea

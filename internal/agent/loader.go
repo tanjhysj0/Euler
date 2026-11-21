@@ -119,7 +119,9 @@ func (l *DBLoader) loadHistory(
 	}
 	history = append(history, schema.SystemMessage(prompt))
 	for _, message := range past {
-		history = append(history, displayMessage(message))
+		if display := displayMessage(message); display != nil {
+			history = append(history, display)
+		}
 	}
 	return append(history, schema.UserMessage(current.Content)), nil
 }
@@ -136,8 +138,14 @@ func renderSystemPrompt(name, dir string) (string, error) {
 	return strings.ReplaceAll(string(data), promptPlaceholder, dir), nil
 }
 
+// displayMessage 把历史消息转换为模型可接受的格式。正文为空的助手消息
+// （模型只返回思考内容、Run 被取消或失败）必须跳过：上游会拒绝
+// content、tool_calls、reasoning_content 同时为空的 assistant 消息。
 func displayMessage(message persistence.Message) *schema.Message {
 	if message.Role == roleAssistant {
+		if strings.TrimSpace(message.Content) == emptyContent {
+			return nil
+		}
 		return schema.AssistantMessage(message.Content, nil)
 	}
 	return schema.UserMessage(message.Content)

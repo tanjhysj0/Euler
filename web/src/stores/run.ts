@@ -9,6 +9,8 @@ export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting'
 // 权威数据（消息、工具调用、审批）始终来自 REST 快照。
 export interface RunStoreState {
   deltas: Record<string, string>
+  // reasoning 按消息 ID 累积模型思考增量；思考过程不落库，刷新后丢失。
+  reasoning: Record<string, string>
   lastSeq: Record<string, number>
   seenEventKeys: Set<string>
   connection: ConnectionStatus | null
@@ -25,6 +27,7 @@ export interface RunStoreState {
 
 const initializer: StateCreator<RunStoreState> = (set, get) => ({
   deltas: {},
+  reasoning: {},
   lastSeq: {},
   seenEventKeys: new Set<string>(),
   connection: null,
@@ -51,6 +54,18 @@ const initializer: StateCreator<RunStoreState> = (set, get) => ({
         deltas: {
           ...get().deltas,
           [payload.message_id]: (get().deltas[payload.message_id] ?? '') + payload.delta,
+        },
+      })
+      return
+    }
+    if (envelope.type === 'message.reasoning') {
+      const payload = envelope.payload as { message_id: string; delta: string }
+      set({
+        seenEventKeys,
+        lastSeq,
+        reasoning: {
+          ...get().reasoning,
+          [payload.message_id]: (get().reasoning[payload.message_id] ?? '') + payload.delta,
         },
       })
       return

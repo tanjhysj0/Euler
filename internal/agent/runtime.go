@@ -334,10 +334,15 @@ func streamHasToolCalls(
 	}
 }
 
-// forwardAssistant 写出一个分片中的助手文本，并报告该分片是否携带工具调用。
+// forwardAssistant 写出一个分片中的思考与助手文本，并报告该分片是否携带工具调用。
 func forwardAssistant(
 	ctx context.Context, message *schema.Message, sink assistantSink,
 ) (bool, error) {
+	if message.Role == schema.Assistant && message.ReasoningContent != emptyContent {
+		if err := sink.addReasoning(ctx, message.ReasoningContent); err != nil {
+			return false, err
+		}
+	}
 	if message.Role == schema.Assistant && message.Content != emptyContent {
 		if err := sink.add(ctx, message.Content); err != nil {
 			return false, err

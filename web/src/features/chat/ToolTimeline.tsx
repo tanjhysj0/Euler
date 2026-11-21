@@ -1,6 +1,7 @@
 import { Alert, Button, Card, Empty, Space, Tag, Typography } from 'antd'
-import type { RunSnapshot, ToolCallStatus } from '../../api/types'
+import type { RunSnapshot, ToolCallStatus, ToolCallView } from '../../api/types'
 import { useRunStore } from '../../stores/run'
+import TerminalBlock from '../../components/TerminalBlock'
 import ApprovalCard from './ApprovalCard'
 
 interface ToolTimelineProps {
@@ -25,6 +26,39 @@ function summarize(value: unknown): string {
   }
   const text = typeof value === 'string' ? value : JSON.stringify(value)
   return text.length > 200 ? `${text.slice(0, 200)}…` : text
+}
+
+// asRecord 把未知 JSON 收窄为对象；数组与标量按非对象处理。
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null
+  }
+  return value as Record<string, unknown>
+}
+
+interface ShellView {
+  command: string
+  output: string
+  exitCode?: number
+  timedOut: boolean
+  truncated: boolean
+}
+
+// shellView 提取 shell 工具的命令与结果；其他工具返回 null 走通用摘要。
+// 结果字段与 internal/tools/shell.go 的 ShellResult 保持一致。
+function shellView(tool: ToolCallView): ShellView | null {
+  if (tool.name !== 'shell') {
+    return null
+  }
+  const args = asRecord(tool.arguments_json)
+  const result = asRecord(tool.result_json)
+  return {
+    command: typeof args?.command === 'string' ? args.command : '',
+    output: typeof result?.output === 'string' ? result.output : '',
+    exitCode: typeof result?.exit_code === 'number' ? result.exit_code : undefined,
+    timedOut: result?.timed_out === true,
+    truncated: result?.truncated === true,
+  }
 }
 
 // ToolTimeline 展示工具调用卡片与待审批请求；拒绝的工具显示 rejected，
@@ -59,6 +93,7 @@ export default function ToolTimeline({ snapshot, onDecide }: ToolTimelineProps) 
             const status = statusLabels[tool.status] ?? { label: tool.status, color: 'default' }
             const args = summarize(tool.arguments_json)
             const result = summarize(tool.result_json)
+            const shell = shellView(tool)
             return (
               <Card
                 key={tool.id}
@@ -67,8 +102,21 @@ export default function ToolTimeline({ snapshot, onDecide }: ToolTimelineProps) 
                 extra={<Tag color={status.color}>{status.label}</Tag>}
               >
                 <Space orientation="vertical" size="small" style={{ width: '100%' }}>
-                  {args && <Typography.Text type="secondary">参数：{args}</Typography.Text>}
-                  {result && <Typography.Text type="secondary">结果：{result}</Typography.Text>}
+                  {shell ? (
+                    <TerminalBlock
+                      command={shell.command}
+                      output={shell.output}
+                      exitCode={shell.exitCode}
+                      timedOut={shell.timedOut}
+                      truncated={shell.truncated}
+                      title="终端输出"
+                    />
+                  ) : (
+                    <>
+                      {args && <Typography.Text type="secondary">参数：{args}</Typography.Text>}
+                      {result && <Typography.Text type="secondary">结果：{result}</Typography.Text>}
+                    </>
+                  )}
                   {tool.error_message && (
                     <Alert type="error" showIcon title={tool.error_message} />
                   )}

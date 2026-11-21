@@ -21,6 +21,8 @@ const (
 var (
 	// ErrInvalidPath 表示路径不是可访问的绝对目录。
 	ErrInvalidPath = errors.New("invalid path")
+	// ErrUnavailable 表示工作区根目录无法创建或不可写。
+	ErrUnavailable = errors.New("workspace unavailable")
 )
 
 // Service 为会话解析工作区目录。
@@ -56,6 +58,27 @@ func (*Service) NormalizeExisting(path string) (string, error) {
 	return resolved, nil
 }
 
+// EnsureRoot 在启动阶段创建并探测工作区根目录。
+// 提前暴露权限问题，避免用户创建会话时才收到笼统的失败提示。
+func (s *Service) EnsureRoot() error {
+	root, err := filepath.Abs(s.root)
+	if err != nil {
+		return fmt.Errorf("resolve workspace root: %w", err)
+	}
+	if err = os.MkdirAll(root, dirPermission); err != nil {
+		return fmt.Errorf("%w: create workspace root %s: %w", ErrUnavailable, root, err)
+	}
+	probe, err := os.CreateTemp(root, ".euler-write-probe-*")
+	if err != nil {
+		return fmt.Errorf("%w: workspace root %s is not writable: %w", ErrUnavailable, root, err)
+	}
+	name := probe.Name()
+	if err = errors.Join(probe.Close(), os.Remove(name)); err != nil {
+		return fmt.Errorf("%w: clean workspace probe: %w", ErrUnavailable, err)
+	}
+	return nil
+}
+
 // CreateDefault 在服务根目录下创建以 sessionID 命名的 0700 目录，
 // 并返回其规范化的绝对路径。
 func (s *Service) CreateDefault(sessionID uuid.UUID) (string, bool, error) {
@@ -64,15 +87,18 @@ func (s *Service) CreateDefault(sessionID uuid.UUID) (string, bool, error) {
 		return emptyPath, false, fmt.Errorf("resolve workspace root: %w", err)
 	}
 	if err = os.MkdirAll(root, dirPermission); err != nil {
-		return emptyPath, false, fmt.Errorf("create workspace root: %w", err)
+		return emptyPath, false,
+			fmt.Errorf("%w: create workspace root: %w", ErrUnavailable, err)
 	}
 	target := filepath.Join(root, sessionID.String())
 	if err = os.Mkdir(target, dirPermission); err != nil {
-		return emptyPath, false, fmt.Errorf("create session workspace: %w", err)
+		return emptyPath, false,
+			fmt.Errorf("%w: create session workspace: %w", ErrUnavailable, err)
 	}
 	resolved, err := filepath.EvalSymlinks(target)
 	if err != nil {
-		return emptyPath, false, removeAfterFailure(target, err)
+		return emptyPath, false,
+			fmt.Errorf("%w: %w", ErrUnavailable, removeAfterFailure(target, err))
 	}
 	return resolved, true, nil
 }

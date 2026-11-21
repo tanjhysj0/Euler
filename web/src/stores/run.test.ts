@@ -43,6 +43,21 @@ describe('createRunStore', () => {
     expect(store.getState().lastSeq.r2).toBe(1)
   })
 
+  it('思考事件按消息 ID 累积，与正文增量互不影响', () => {
+    const store = createRunStore()
+    store.getState().applyEvent(
+      event({ run_id: 'r1', seq: 1, type: 'message.reasoning', payload: { message_id: 'm1', delta: '先分析' } }),
+    )
+    store.getState().applyEvent(
+      event({ run_id: 'r1', seq: 2, type: 'message.reasoning', payload: { message_id: 'm1', delta: '需求' } }),
+    )
+    store.getState().applyEvent(
+      event({ run_id: 'r1', seq: 3, type: 'message.delta', payload: { message_id: 'm1', delta: '答案' } }),
+    )
+    expect(store.getState().reasoning.m1).toBe('先分析需求')
+    expect(store.getState().deltas.m1).toBe('答案')
+  })
+
   it('resetRun 清空增量与连接状态，但保留草稿', () => {
     const store = createRunStore()
     store.getState().setDraft('s1', '保留草稿')

@@ -15,12 +15,15 @@ const profile: ModelProfile = {
 }
 
 describe('NewSessionDialog', () => {
-  it('留空目录时明确提示自动创建工作区并提交空路径', async () => {
+  it('不再提供目录输入，提交空路径由后端自动分配工作区', async () => {
     const onCreate = vi.fn().mockResolvedValue({ id: 'session-1' })
     renderWithProviders(<NewSessionDialog open profiles={[profile]} onCreate={onCreate} />)
-    expect(screen.getByText(/将自动创建默认工作区/)).toBeInTheDocument()
+    expect(screen.getByText(/系统会自动分配独立工作区/)).toBeInTheDocument()
+    expect(screen.queryByLabelText('工作区目录')).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '创建会话' }))
-    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ path: '' })))
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith({ profile_id: 'profile-1', path: '' }),
+    )
   })
 
   it('模型配置晚于对话框加载时自动选中第一个配置', async () => {
@@ -33,10 +36,5 @@ describe('NewSessionDialog', () => {
         expect.objectContaining({ profile_id: 'profile-1', path: '' }),
       ),
     )
-  })
-
-  it('已有目录存在活跃 Run 时展示并发修改警告', async () => {
-    renderWithProviders(<NewSessionDialog open profiles={[profile]} workspaceWarning />)
-    expect(screen.getByText(/其他会话正在此目录执行任务/)).toBeVisible()
   })
 })

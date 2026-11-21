@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,13 +11,15 @@ import (
 	"github.com/google/uuid"
 
 	"euler/internal/api"
+	"euler/internal/workspace"
 )
 
 const (
-	codeInvalidRequest = "invalid_request"
-	codeNotFound       = "not_found"
-	codeInternalError  = "internal_error"
-	defaultQueryInt    = 0
+	codeInvalidRequest       = "invalid_request"
+	codeNotFound             = "not_found"
+	codeInternalError        = "internal_error"
+	codeWorkspaceUnavailable = "workspace_unavailable"
+	defaultQueryInt          = 0
 )
 
 // WorkspaceView 是会话所关联的工作区。
@@ -203,7 +206,12 @@ func abortSessionError(c *gin.Context, err error, fallback string) {
 		api.AbortWithError(c, http.StatusNotFound, codeNotFound, "会话不存在")
 	case errors.Is(err, ErrInvalidInput):
 		api.AbortWithError(c, http.StatusBadRequest, codeInvalidRequest, "会话参数无效")
+	case errors.Is(err, workspace.ErrUnavailable):
+		slog.Error("session workspace unavailable", "error", err)
+		api.AbortWithError(c, http.StatusServiceUnavailable, codeWorkspaceUnavailable,
+			"工作区目录不可用，请检查 workspace_root 配置与权限")
 	default:
+		slog.Error("session request failed", "error", err, "fallback", fallback)
 		api.AbortWithError(c, http.StatusInternalServerError, codeInternalError, fallback)
 	}
 }

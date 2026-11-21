@@ -25,15 +25,18 @@ const (
 )
 
 // deltaWriter 将助手文本批量写入流式消息行和 message.delta 事件。
+// 思考过程只发 message.reasoning 事件，不落库。
 // 只有 future 消费者 goroutine 会访问它。
 type deltaWriter struct {
-	messages  MessageRecorder
-	events    event.Publisher
-	runID     uuid.UUID
-	messageID uuid.UUID
-	apiKey    string
-	full      strings.Builder
-	pending   []rune
+	messages         MessageRecorder
+	events           event.Publisher
+	runID            uuid.UUID
+	messageID        uuid.UUID
+	apiKey           string
+	full             strings.Builder
+	pending          []rune
+	reasoning        strings.Builder
+	reasoningPending []rune
 }
 
 func newDeltaWriter(
@@ -59,9 +62,22 @@ func (w *deltaWriter) add(ctx context.Context, content string) error {
 	return nil
 }
 
-// flush 先更新消息行，再追加事件，确保回放和实时订阅者绝不会看到
-// 缺少已存储前缀的 delta。
+// addReasoning 累积模型思考增量，按与正文相同的批次发送事件。
+func (w *deltaWriter) addReasoning(ctx context.Context, content string) error {
+	w.reasoningPending = append(w.reasoningPending, []rune(content)...)
+	_, _ = w.reasoning.WriteString(content)
+	if len(w.reasoningPending) >= deltaBatchRunes {
+		return w.flushReasoning(ctx)
+	}
+	return nil
+}
+
+// flush 先刷新思考事件，再更新消息行与正文事件，确保回放和实时订阅者
+// 绝不会看到缺少已存储前缀的 delta。
 func (w *deltaWriter) flush(ctx context.Context) error {
+	if err := w.flushReasoning(ctx); err != nil {
+		return err
+	}
 	if len(w.pending) == emptyPending {
 		return nil
 	}
@@ -80,9 +96,27 @@ func (w *deltaWriter) flush(ctx context.Context) error {
 	return nil
 }
 
-// assistantSink 接收助手文本增量；生产实现是 deltaWriter，测试可注入内存实现。
+// flushReasoning 只追加思考事件；思考过程当前不落库，刷新后不再展示。
+func (w *deltaWriter) flushReasoning(ctx context.Context) error {
+	if len(w.reasoningPending) == emptyPending {
+		return nil
+	}
+	delta := logging.Redact(string(w.reasoningPending), w.apiKey)
+	w.reasoningPending = w.reasoningPending[:emptyPending]
+	_, err := w.events.Append(ctx, w.runID, "message.reasoning", map[string]any{
+		"message_id": w.messageID.String(), "delta": delta,
+	})
+	if err != nil {
+		return fmt.Errorf("append message reasoning: %w", err)
+	}
+	return nil
+}
+
+// assistantSink 接收助手文本与思考增量；生产实现是 deltaWriter，
+// 测试可注入内存实现。
 type assistantSink interface {
 	add(ctx context.Context, content string) error
+	addReasoning(ctx context.Context, content string) error
 	flush(ctx context.Context) error
 }
 

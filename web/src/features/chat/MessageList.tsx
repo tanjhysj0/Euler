@@ -5,6 +5,7 @@ import MarkdownView from '../../components/MarkdownView'
 interface MessageListProps {
   messages: MessageView[]
   deltas: Record<string, string>
+  reasoning: Record<string, string>
 }
 
 // mergeStreamingText 合并权威 content 与本地增量：服务端先写库后发 delta，
@@ -22,8 +23,9 @@ function mergeStreamingText(content: string, delta: string): string {
   return content + delta
 }
 
-// MessageList 只渲染消息 content（streaming 时拼接本地增量），不读取 reasoning。
-export default function MessageList({ messages, deltas }: MessageListProps) {
+// MessageList 渲染消息 content（streaming 时拼接本地增量）与模型思考过程；
+// reasoning 只来自实时事件，不落库，刷新后不展示。
+export default function MessageList({ messages, deltas, reasoning }: MessageListProps) {
   if (messages.length === 0) {
     return <Empty description="暂无消息" />
   }
@@ -34,9 +36,18 @@ export default function MessageList({ messages, deltas }: MessageListProps) {
           message.status === 'streaming'
             ? mergeStreamingText(message.content, deltas[message.id] ?? '')
             : message.content
+        // 部分模型会返回空白 reasoning_content，去掉首尾空白后再判断，
+        // 避免展示空的“思考过程”折叠区。
+        const thinking = reasoning[message.id]?.trim()
         return (
           <div key={message.id}>
             <Tag>{message.role === 'user' ? '用户' : '助手'}</Tag>
+            {message.role !== 'user' && thinking && (
+              <details className="reasoning-block">
+                <summary>{message.status === 'streaming' ? '思考中…' : '思考过程'}</summary>
+                <div className="reasoning-text">{thinking}</div>
+              </details>
+            )}
             <MarkdownView content={content} />
           </div>
         )

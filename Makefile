@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt tidy web-install web-test web-build test-e2e dev-api dev-web harbor-test harbor-test-easy harbor-test-medium harbor-test-hard harbor-test-all agent-dist
+.PHONY: build test lint fmt tidy web-install web-test web-build test-e2e test-smoke dev-api dev-web harbor-test harbor-test-easy harbor-test-medium harbor-test-hard harbor-test-all agent-dist
 
 # Harbor 评测使用的默认模型；可用同名环境变量覆盖。
 EULER_MODEL_BASE_URL ?= https://api.deepseek.com
@@ -67,6 +67,15 @@ web-build:
 
 test-e2e:
 	npm --prefix web run test:e2e
+
+# 真实模型冒烟：真实 DeepSeek + 真实数据库，只跑 1 个端到端用例，
+# 用于验证 mock E2E 覆盖不到的流式响应与真实工具调用。
+test-smoke:
+	@if [ -z "$${OPENAI_API_KEY:-}" ] && [ -f "$$HOME/.zprofile" ]; then \
+		set -a; . "$$HOME/.zprofile" >/dev/null 2>&1 || true; set +a; \
+	fi; \
+	test -n "$${OPENAI_API_KEY:-}" || (echo "缺少 OPENAI_API_KEY" >&2; exit 1); \
+	OPENAI_API_KEY="$${OPENAI_API_KEY}" npm --prefix web run test:smoke
 
 dev-api:
 	go run ./cmd/euler

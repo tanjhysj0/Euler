@@ -31,3 +31,98 @@ body,
   color: rgba(0, 0, 0, 0.45);
   font-size: 12px;
 }
+
+/* 终端块：正文 shell 代码块与 shell 工具结果共用。 */
+.terminal-block {
+  margin: 8px 0;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0d1117;
+  color: #e6edf3;
+}
+
+.terminal-block-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  background: #161b22;
+  color: #8b949e;
+  font-size: 12px;
+}
+
+.terminal-block-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminal-block-body {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.terminal-prompt {
+  color: #3fb950;
+  user-select: none;
+}
+
+.terminal-output {
+  color: #e6edf3;
+}
+
+.terminal-block-ok {
+  color: #3fb950;
+}
+
+.terminal-block-warn {
+  color: #d29922;
+}
+
+.terminal-block-bad {
+  color: #f85149;
+}
+
+/* 普通代码块：与终端块区分，保持浅色主题。 */
+.code-block {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+/* 思考过程：默认折叠，展开后滚动查看，避免长思考撑高消息区。 */
+.reasoning-block {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border: 1px dashed #d9d9d9;
+  border-radius: 8px;
+  background: #fafafa;
+  color: rgba(0, 0, 0, 0.65);
+  font-size: 13px;
+}
+
+.reasoning-block summary {
+  cursor: pointer;
+  color: rgba(0, 0, 0, 0.45);
+  user-select: none;
+}
+
+.reasoning-text {
+  margin-top: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+

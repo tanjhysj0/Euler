@@ -84,10 +84,10 @@ const streamingMessage: MessageView = {
   created_at: '2026-11-18T10:00:01Z',
 }
 
-function makeSnapshot(status: RunStatus): RunSnapshot {
+function makeSnapshot(status: RunStatus, runId = 'r1'): RunSnapshot {
   return {
     run: {
-      id: 'r1',
+      id: runId,
       session_id: 's1',
       status,
       next_event_seq: 6,
@@ -148,6 +148,9 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     runFetchCount += 1
     return ok(snapshot)
   }
+  if (url === '/api/v1/runs/r2' && method === 'GET') {
+    return ok(makeSnapshot('succeeded', 'r2'))
+  }
   if (url === '/api/v1/sessions/s1/runs' && method === 'POST') {
     return ok({ ...startResult, workspace_warning: workspaceWarning })
   }
@@ -185,6 +188,7 @@ beforeEach(() => {
   calls = []
   useRunStore.setState({
     deltas: {},
+    reasoning: {},
     lastSeq: {},
     seenEventKeys: new Set<string>(),
     connection: null,
@@ -215,8 +219,43 @@ describe('ChatPanel', () => {
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining('const answer = 42'))
   })
 
+  it('Markdown 的 shell 代码块渲染为终端样式', async () => {
+    messages = [
+      userMessage,
+      { ...streamingMessage, status: 'completed', content: '```bash\nls -la\n```' },
+    ]
+    renderWithProviders(<ChatPanel session={session} />)
+    await waitFor(() => expect(document.querySelector('.terminal-block')).not.toBeNull())
+    const terminal = document.querySelector('.terminal-block') as HTMLElement
+    expect(terminal.textContent).toContain('$ ')
+    expect(terminal.textContent).toContain('ls -la')
+  })
+
+  it('shell 工具卡片用终端样式展示命令、退出码与完整输出', async () => {
+    const output = 'x'.repeat(300)
+    const toolCall: ToolCallView = {
+      id: 'tc-shell',
+      run_id: 'r1',
+      name: 'shell',
+      arguments_json: { command: 'printf hello', dir: '/tmp/ws' },
+      status: 'succeeded',
+      result_json: { output, exit_code: 0, timed_out: false, truncated: false },
+      created_at: '2026-11-18T10:00:00Z',
+    }
+    snapshot = { ...makeSnapshot('succeeded'), tool_calls: [toolCall] }
+    renderWithProviders(<ChatPanel session={session} />)
+    await waitFor(() => expect(document.querySelector('.terminal-block')).not.toBeNull())
+    const terminal = document.querySelector('.terminal-block') as HTMLElement
+    expect(terminal.textContent).toContain('$ printf hello')
+    // 终端块不再走 200 字符摘要，完整输出必须保留。
+    expect(terminal.textContent).toContain(output)
+    expect(screen.getByText('退出码 0')).toBeVisible()
+  })
+
   it('Enter 发送消息并清空草稿', async () => {
     messages = [userMessage, { ...streamingMessage, status: 'completed', content: '回答完毕' }]
+    // 消息已完成即上一轮 Run 结束，快照需返回终态，输入区才可发送。
+    snapshot = makeSnapshot('succeeded')
     renderWithProviders(<ChatPanel session={session} />)
     const textarea = await screen.findByPlaceholderText('输入消息')
     await userEvent.type(textarea, '新的任务{Enter}')
@@ -264,6 +303,28 @@ describe('ChatPanel', () => {
     expect(screen.queryByText('连接中')).not.toBeInTheDocument()
   })
 
+  it('后续 Run 完成后不被更早的已取消 Run 覆盖状态', async () => {
+    // 取消旧 Run 后再发起新 Run：末尾消息属于新 Run 且已完成，
+    // 刷新恢复时不能回退到更早的 cancelled 消息。
+    messages = [
+      userMessage,
+      { ...streamingMessage, status: 'cancelled', content: '片段[0001]' },
+      { ...userMessage, id: 'm3', run_id: 'r2', session_seq: 3, content: '快速完成' },
+      {
+        ...streamingMessage,
+        id: 'm4',
+        run_id: 'r2',
+        session_seq: 4,
+        status: 'completed',
+        content: '快速完成。',
+      },
+    ]
+    renderWithProviders(<ChatPanel session={session} />)
+    expect(await screen.findByText('快速完成。')).toBeVisible()
+    expect(screen.queryByText('已取消')).not.toBeInTheDocument()
+    expect(calls.some((call) => call.url === '/api/v1/runs/r1')).toBe(false)
+  })
+
   it('停止弹窗取消不发送取消请求', async () => {
     renderWithProviders(<ChatPanel session={session} />)
     await userEvent.click(await screen.findByRole('button', { name: '停止' }))
@@ -292,6 +353,32 @@ describe('ChatPanel', () => {
     expect(screen.getByText('重连中')).toBeVisible()
     expect(screen.getByText('运行中')).toBeVisible()
     expect(screen.queryByText('失败')).not.toBeInTheDocument()
+  })
+
+  it('思考过程按事件累积并以折叠区展示', async () => {
+    renderWithProviders(<ChatPanel session={session} />)
+    await screen.findByText('连接中')
+    const source = FakeEventSource.instances.at(-1)
+    act(() => {
+      source?.emitMessage(
+        envelope({
+          seq: 6,
+          type: 'message.reasoning',
+          payload: { message_id: 'm2', delta: '先分析' },
+        }),
+      )
+      source?.emitMessage(
+        envelope({
+          seq: 7,
+          type: 'message.reasoning',
+          payload: { message_id: 'm2', delta: '需求。' },
+        }),
+      )
+    })
+    expect(await screen.findByText('思考中…')).toBeVisible()
+    const details = document.querySelector('.reasoning-block') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    expect(details.textContent).toContain('先分析需求。')
   })
 
   it('SSE 增量按 seq 去重，终态关闭连接并由权威快照接管', async () => {
@@ -438,6 +525,7 @@ describe('ChatPanel', () => {
 
   it('发送后 workspace_warning 提示并发修改风险', async () => {
     messages = [userMessage, { ...streamingMessage, status: 'completed', content: '回答完毕' }]
+    snapshot = makeSnapshot('succeeded')
     workspaceWarning = true
     renderWithProviders(<ChatPanel session={session} />)
     await userEvent.type(await screen.findByPlaceholderText('输入消息'), '新的任务{Enter}')

@@ -67,17 +67,6 @@ export interface MessagePage {
   next_after: number
 }
 
-export interface DirectoryEntry {
-  name: string
-  path: string
-}
-
-export interface DirectoryListing {
-  current_path: string
-  parent_path: string | null
-  directories: DirectoryEntry[]
-}
-
 // FileNode 对应后端 workspace.FileNode：工作区文件树的一个节点。
 export interface FileNode {
   path: string

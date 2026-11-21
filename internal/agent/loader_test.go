@@ -3,6 +3,8 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	"euler/internal/persistence"
 )
 
 const testWorkspace = "/tmp/workspace"
@@ -43,5 +45,19 @@ func TestRenderSystemPromptFallsBackToCoding(t *testing.T) {
 func TestRenderSystemPromptRejectsUnknownTemplate(t *testing.T) {
 	if _, err := renderSystemPrompt("missing", testWorkspace); err == nil {
 		t.Fatal("未知模板应当报错")
+	}
+}
+
+func TestDisplayMessageSkipsEmptyAssistant(t *testing.T) {
+	got := displayMessage(persistence.Message{Role: roleAssistant, Content: " \n"})
+	if got != nil {
+		t.Fatalf("空白助手消息应被跳过，实际得到 %#v", got)
+	}
+	assistant := displayMessage(persistence.Message{Role: roleAssistant, Content: "完成"})
+	if assistant == nil || assistant.Content != "完成" {
+		t.Fatalf("有效助手消息不应被丢弃: %#v", assistant)
+	}
+	if user := displayMessage(persistence.Message{Role: roleUser, Content: "hi"}); user == nil {
+		t.Fatal("用户消息不应被丢弃")
 	}
 }

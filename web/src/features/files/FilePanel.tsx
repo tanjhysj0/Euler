@@ -1,5 +1,6 @@
-import { Alert, Empty, Space, Tree } from 'antd'
-import { useState } from 'react'
+import { Alert, Button, Empty, Space, Tree, Typography } from 'antd'
+import { useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { APIError } from '../../api/client'
 import { useWorkspaceFiles } from '../../api/queries'
 import type { FileNode } from '../../api/types'
@@ -16,8 +17,7 @@ interface TreeNode {
   children?: TreeNode[]
 }
 
-// buildTree 把后端扁平路径列表组装成 antd Tree 数据；
-// 按路径排序保证父目录先于子节点出现。
+// buildTree 把后端扁平路径列表组装成树；路径排序保证父目录先于子节点出现。
 function buildTree(nodes: FileNode[]): TreeNode[] {
   const dirs = new Map<string, TreeNode>()
   const roots: TreeNode[] = []
@@ -40,13 +40,49 @@ function buildTree(nodes: FileNode[]): TreeNode[] {
       roots.push(item)
     }
   }
-  return roots
+  return sortTree(roots)
 }
 
-// FilePanel 展示工作区产物文件树，选中文件后在下方预览。
+// sortTree 递归排序：目录在前、文件在后，同类按名称排序，贴近 IDE 习惯。
+function sortTree(nodes: TreeNode[]): TreeNode[] {
+  nodes.sort((a, b) => {
+    if (a.isLeaf !== b.isLeaf) {
+      return a.isLeaf ? 1 : -1
+    }
+    return a.title.localeCompare(b.title)
+  })
+  for (const node of nodes) {
+    if (node.children) {
+      sortTree(node.children)
+    }
+  }
+  return nodes
+}
+
+// collectDirKeys 收集全部目录 key，作为首次渲染的默认展开集合。
+function collectDirKeys(nodes: TreeNode[]): string[] {
+  const keys: string[] = []
+  for (const node of nodes) {
+    if (node.isLeaf) {
+      continue
+    }
+    keys.push(node.key)
+    if (node.children) {
+      keys.push(...collectDirKeys(node.children))
+    }
+  }
+  return keys
+}
+
+// FilePanel 以 IDE 风格展示工作区文件树：目录点击展开/收起，文件点击预览。
 export default function FilePanel({ workspaceId }: FilePanelProps) {
+  const queryClient = useQueryClient()
   const filesQuery = useWorkspaceFiles(workspaceId)
   const [selected, setSelected] = useState<string | null>(null)
+  // null 表示尚未手动操作，使用“全部展开”的默认值；操作后保持用户选择。
+  const [expandedKeys, setExpandedKeys] = useState<string[] | null>(null)
+  const tree = useMemo(() => buildTree(filesQuery.data ?? []), [filesQuery.data])
+
   if (filesQuery.isError) {
     const error = filesQuery.error
     return (
@@ -61,20 +97,49 @@ export default function FilePanel({ workspaceId }: FilePanelProps) {
     return <Empty description="加载文件树中…" />
   }
   if (filesQuery.data.length === 0) {
-    return <Empty description="工作区暂无文件" />
+    return <Empty description="暂无文件，运行任务后产物会出现在这里" />
   }
+  const effectiveExpanded = expandedKeys ?? collectDirKeys(tree)
   return (
-    <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+    <Space orientation="vertical" size="small" style={{ width: '100%' }}>
+      <Space style={{ justifyContent: 'space-between', width: '100%' }}>
+        <Typography.Text strong>工作区文件</Typography.Text>
+        <Button
+          size="small"
+          onClick={() => void queryClient.invalidateQueries({ queryKey: ['files', workspaceId] })}
+        >
+          刷新
+        </Button>
+      </Space>
       <Tree
-        treeData={buildTree(filesQuery.data)}
-        defaultExpandAll
+        blockNode
+        showLine
+        treeData={tree}
+        expandedKeys={effectiveExpanded}
+        selectedKeys={selected === null ? [] : [selected]}
+        onExpand={(keys) => setExpandedKeys(keys.map(String))}
         onSelect={(keys, info) => {
-          if (info.node.isLeaf && keys.length > 0) {
+          if (!info.node.isLeaf) {
+            // 点击目录只切换展开状态，不把它当作预览目标。
+            const key = String(info.node.key)
+            setExpandedKeys(
+              effectiveExpanded.includes(key)
+                ? effectiveExpanded.filter((item) => item !== key)
+                : [...effectiveExpanded, key],
+            )
+            return
+          }
+          if (keys.length > 0) {
             setSelected(String(keys[0]))
           }
         }}
       />
-      {selected !== null && <FilePreview workspaceId={workspaceId} path={selected} />}
+      {selected !== null && (
+        <div>
+          <Typography.Text type="secondary">{selected}</Typography.Text>
+          <FilePreview workspaceId={workspaceId} path={selected} />
+        </div>
+      )}
     </Space>
   )
 }

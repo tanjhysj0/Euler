@@ -6,7 +6,6 @@ import type {
   CreateModelProfileInput,
   CreateSessionInput,
   CreateSessionResult,
-  DirectoryListing,
   FileNode,
   MessagePage,
   MessageView,
@@ -81,16 +80,6 @@ export function useCreateModelProfile() {
         body: JSON.stringify(input),
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['model-profiles'] }),
-  })
-}
-
-// 目录浏览只调用 /fs/directories，不读取文件内容。
-export function useDirectoryListing(path: string, enabled: boolean) {
-  return useQuery({
-    queryKey: ['fs-directories', path],
-    queryFn: () =>
-      apiFetch<DirectoryListing>(`/fs/directories?path=${encodeURIComponent(path)}`),
-    enabled,
   })
 }
 

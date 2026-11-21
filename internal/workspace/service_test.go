@@ -74,6 +74,40 @@ func TestCleanupCreatedSkipsDirectoryWhenNotCreated(t *testing.T) {
 	require.DirExists(t, path)
 }
 
+func TestEnsureRootCreatesWritableRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "nested", "workspaces")
+	svc := NewService(root)
+	require.NoError(t, svc.EnsureRoot())
+	require.DirExists(t, root)
+}
+
+func TestEnsureRootReportsUnavailableWhenRootIsFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(root, []byte("x"), 0o600))
+	err := NewService(root).EnsureRoot()
+	require.ErrorIs(t, err, ErrUnavailable)
+}
+
+func TestCreateDefaultReportsUnavailableWhenRootIsFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(root, []byte("x"), 0o600))
+	_, _, err := NewService(root).CreateDefault(uuid.New())
+	require.ErrorIs(t, err, ErrUnavailable)
+}
+
+func TestCreateDefaultAllocatesUniqueDirectories(t *testing.T) {
+	svc := NewService(t.TempDir())
+	first, created, err := svc.CreateDefault(uuid.New())
+	require.NoError(t, err)
+	require.True(t, created)
+	second, created, err := svc.CreateDefault(uuid.New())
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NotEqual(t, first, second)
+	require.DirExists(t, first)
+	require.DirExists(t, second)
+}
+
 func TestBrowseListsSortedDirectoriesAndParent(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(root, "beta"), 0o700))

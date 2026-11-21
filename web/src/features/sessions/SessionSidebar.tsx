@@ -45,9 +45,7 @@ export default function SessionSidebar() {
   async function handleCreate(input: CreateSessionInput) {
     const result = await createSession.mutateAsync(input)
     setDialogOpen(false)
-    navigate(`/sessions/${result.id}`, {
-      state: { workspaceWarning: result.workspace_warning },
-    })
+    navigate(`/sessions/${result.id}`)
     return result
   }
 

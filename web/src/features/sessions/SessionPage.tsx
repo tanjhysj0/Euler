@@ -1,23 +1,17 @@
 import { Alert, Button, Empty, Space, Tag, Typography } from 'antd'
 import { useState } from 'react'
-import { useLocation, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import { APIError } from '../../api/client'
 import { useSession } from '../../api/queries'
 import ChatPanel from '../chat/ChatPanel'
 import FilePanel from '../files/FilePanel'
 
-interface SessionLocationState {
-  workspaceWarning?: boolean
-}
-
-// SessionPage 展示会话头部（标题、工作区路径、模型）与创建工作区时的并发提示，
+// SessionPage 展示会话头部（标题、工作区路径、模型），右侧常驻工作区文件树，
 // 对话、工具时间线与审批交互由 ChatPanel 承载。
 export default function SessionPage() {
   const { id } = useParams()
-  const location = useLocation()
   const sessionQuery = useSession(id)
-  const [filesOpen, setFilesOpen] = useState(false)
-  const state = location.state as SessionLocationState | null
+  const [filesOpen, setFilesOpen] = useState(true)
   const session = sessionQuery.data
 
   if (sessionQuery.isError) {
@@ -38,13 +32,6 @@ export default function SessionPage() {
   }
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-      {state?.workspaceWarning && (
-        <Alert
-          type="warning"
-          showIcon
-          title="其他会话正在此目录执行任务，注意并发修改风险"
-        />
-      )}
       <Typography.Title level={4} style={{ margin: 0 }}>
         {session.title}
       </Typography.Title>
@@ -53,7 +40,7 @@ export default function SessionPage() {
         <Tag>{session.model.name}</Tag>
         <Tag color="blue">{session.status}</Tag>
         <Button size="small" onClick={() => setFilesOpen((open) => !open)}>
-          {filesOpen ? '收起文件' : '文件'}
+          {filesOpen ? '收起文件' : '展开文件'}
         </Button>
       </Space>
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
@@ -61,7 +48,7 @@ export default function SessionPage() {
           <ChatPanel key={session.id} session={session} />
         </div>
         {filesOpen && (
-          <div style={{ width: 360, flexShrink: 0 }}>
+          <div style={{ width: 380, flexShrink: 0 }}>
             <FilePanel workspaceId={session.workspace.id} />
           </div>
         )}
