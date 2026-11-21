@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,8 @@ const (
 	stdinFlag = "-s"
 	// fallbackShell 是候选解释器都不存在时的兜底选择。
 	fallbackShell = "/bin/sh"
+	// darwinGOOS 是 macOS 的 GOOS 取值，用于保留本地登录 shell 行为。
+	darwinGOOS = "darwin"
 	// envAssignment 分隔环境变量的键与值。
 	envAssignment = "="
 	// emptyCapacity 用于以预设长度构建切片。
@@ -37,12 +40,20 @@ type shellSpec struct {
 	login bool
 }
 
-// shellCandidates 按优先级列出解释器：macOS 宿主优先用 zsh，而任务容器
-// 通常只带 bash 或 sh，因此需要运行时探测，不能写死其中一个。
-var shellCandidates = []shellSpec{
-	{path: "/bin/zsh", login: true},
-	{path: "/bin/bash", login: true},
-	{path: "/bin/sh"},
+// shellCandidates 返回当前平台优先使用的解释器顺序。评测任务跑在 Linux
+// 容器里，因此以 bash/sh 为主；macOS 上保留 zsh 登录 shell 以读取用户 PATH。
+func shellCandidates() []shellSpec {
+	if runtime.GOOS == darwinGOOS {
+		return []shellSpec{
+			{path: "/bin/zsh", login: true},
+			{path: "/bin/bash", login: true},
+			{path: "/bin/sh"},
+		}
+	}
+	return []shellSpec{
+		{path: "/bin/bash", login: true},
+		{path: "/bin/sh"},
+	}
 }
 
 var (
@@ -111,10 +122,15 @@ func (s *Shell) Execute(ctx context.Context, request ShellRequest) ShellResult {
 	return collect(shellCtx, output, cmd.Run())
 }
 
-// resolveShell 按优先级返回实际存在的解释器及启动参数；登录参数只对
-// 支持 -l 的 zsh/bash 使用。exists 便于测试注入不同的探测结果。
+// resolveShell 按当前平台优先级返回实际存在的解释器及启动参数；
+// 登录参数只对支持 -l 的 zsh/bash 使用。
 func resolveShell(exists func(string) bool) (string, []string) {
-	for _, candidate := range shellCandidates {
+	return resolveShellFrom(shellCandidates(), exists)
+}
+
+// resolveShellFrom 从候选列表中选出第一个存在的解释器；exists 便于测试。
+func resolveShellFrom(candidates []shellSpec, exists func(string) bool) (string, []string) {
+	for _, candidate := range candidates {
 		if !exists(candidate.path) {
 			continue
 		}
