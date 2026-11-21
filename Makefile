@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt tidy web-install web-test web-build test-e2e dev-api dev-web harbor-test agent-dist
+.PHONY: build test lint fmt tidy web-install web-test web-build test-e2e dev-api dev-web harbor-test harbor-test-easy harbor-test-medium harbor-test-hard harbor-test-all agent-dist
 
 # Harbor 评测使用的默认模型；可用同名环境变量覆盖。
 EULER_MODEL_BASE_URL ?= https://api.deepseek.com
@@ -25,6 +25,10 @@ HARBOR_TASKS ?=
 # 精选任务清单（每行一个仓库相对路径）；HARBOR_TASKS 为空时使用。
 HARBOR_TASKS_FILE ?= harbor_eval/tasks/selected-tasks.txt
 HARBOR_SELECTED ?= $(shell grep -v '^\#' $(HARBOR_TASKS_FILE) 2>/dev/null | sed '/^$$/d')
+# 按难度分组的精选清单，各 10 个任务；程序执行时间上限分别为 30s / 30s / 60s。
+HARBOR_EASY_TASKS_FILE ?= harbor_eval/tasks/selected-easy.txt
+HARBOR_MEDIUM_TASKS_FILE ?= harbor_eval/tasks/selected-medium.txt
+HARBOR_HARD_TASKS_FILE ?= harbor_eval/tasks/selected-hard.txt
 # 容器内 agent 二进制的输出目录。
 AGENT_DIST ?= bin/agent-dist
 
@@ -145,3 +149,16 @@ harbor-test:
 			find "$$job_dir" -name reward.txt -exec cat {} \; 2>/dev/null | \
 				awk '{total++; if ($$1 == "1") passed++} END {printf "==> 通过 %d/%d\n", passed, total}'; \
 		fi
+
+# 按难度分组运行精选任务，复用 harbor-test 的构建与结果汇总逻辑。
+harbor-test-easy:
+	@$(MAKE) --no-print-directory harbor-test HARBOR_TASKS_FILE=$(HARBOR_EASY_TASKS_FILE)
+
+harbor-test-medium:
+	@$(MAKE) --no-print-directory harbor-test HARBOR_TASKS_FILE=$(HARBOR_MEDIUM_TASKS_FILE)
+
+harbor-test-hard:
+	@$(MAKE) --no-print-directory harbor-test HARBOR_TASKS_FILE=$(HARBOR_HARD_TASKS_FILE)
+
+# 依次跑完三组；任意一组失败都会中止。
+harbor-test-all: harbor-test-easy harbor-test-medium harbor-test-hard

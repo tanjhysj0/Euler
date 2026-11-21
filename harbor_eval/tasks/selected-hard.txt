@@ -1,0 +1,13 @@
+# 困难任务组：tb21 代码/安全/数据科学中 difficulty=hard 的任务。
+# 选择标准：arm64 可运行、参考解可 100% 通过，且单次程序执行（构建 + 验证）
+# 不超过 60 秒；括号内为实测 verifier 耗时。
+harbor_eval/tasks/_downloads/tb21-systems-security/fix-code-vulnerability
+harbor_eval/tasks/_downloads/tb21-systems-security/feal-linear-cryptanalysis
+harbor_eval/tasks/_downloads/tb21-systems-security/configure-git-webserver
+harbor_eval/tasks/_downloads/tb21-systems-security/password-recovery
+harbor_eval/tasks/_downloads/tb21-code-debug/path-tracing-reverse
+harbor_eval/tasks/_downloads/tb21-code-debug/gpt2-codegolf
+harbor_eval/tasks/_downloads/tb21-data-science/llm-inference-batching-scheduler
+harbor_eval/tasks/_downloads/tb21-code-debug/write-compressor
+harbor_eval/tasks/_downloads/tb21-systems-security/model-extraction-relu-logits
+harbor_eval/tasks/_downloads/tb21-code-debug/make-mips-interpreter

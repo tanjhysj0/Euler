@@ -1,0 +1,12 @@
+# 中等任务组：humanevalfix / aider-polyglot 中 difficulty=medium 的任务。
+# 选择标准：arm64 可运行、单次程序执行（构建 + 验证）不超过 30 秒。
+harbor_eval/tasks/_downloads/humanevalfix/python-0
+harbor_eval/tasks/_downloads/humanevalfix/python-2
+harbor_eval/tasks/_downloads/humanevalfix/python-4
+harbor_eval/tasks/_downloads/humanevalfix/python-5
+harbor_eval/tasks/_downloads/humanevalfix/python-6
+harbor_eval/tasks/_downloads/humanevalfix/python-7
+harbor_eval/tasks/_downloads/humanevalfix/python-9
+harbor_eval/tasks/_downloads/humanevalfix/python-10
+harbor_eval/tasks/_downloads/aider-polyglot/polyglot_python_affine-cipher
+harbor_eval/tasks/_downloads/aider-polyglot/polyglot_python_beer-song
