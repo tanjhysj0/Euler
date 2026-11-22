@@ -70,6 +70,26 @@ test('自动工作区、工具执行与产物预览', async ({ page }) => {
   await expect(page.locator('pre')).toContainText('# Euler 验收')
 })
 
+test('continue 后刷新，两次 Run 的工具时间线都保留', async ({ page }) => {
+  await ensureProfile(page)
+  await newSession(page)
+  await send(page, '创建验收文档')
+  await expect(page.locator('.tool-timeline').first()).toContainText('note.txt')
+  await expect(page.getByText('已完成')).toBeVisible()
+
+  // 同一会话继续第二次 Run，上一次的时间线不能被覆盖。
+  await send(page, '创建多个文件')
+  await expect(page.locator('.tool-timeline').last()).toContainText('b.txt')
+  await expect(page.getByText('已完成')).toBeVisible()
+
+  // 刷新后从数据库重建：两条时间线都在，且各自保留自己的文件。
+  await page.reload()
+  await expect(page.locator('.tool-timeline')).toHaveCount(2)
+  await expect(page.locator('.tool-timeline').first()).toContainText('note.txt')
+  await expect(page.locator('.tool-timeline').last()).toContainText('a.txt')
+  await expect(page.locator('.tool-timeline').last()).toContainText('b.txt')
+})
+
 test('慢速流刷新无重复，停止后已取消且刷新保持一致', async ({ page }) => {
   await ensureProfile(page)
   await newSession(page)

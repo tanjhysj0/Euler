@@ -38,6 +38,24 @@ const connectionLabels: Record<ConnectionStatus, string> = {
   reconnecting: '重连中',
 }
 
+interface HistoricalRunToolsProps {
+  runId: string
+  onDecide: (approvalId: string, approved: boolean, reason: string) => Promise<void>
+}
+
+// HistoricalRunTools 按消息上的 run_id 加载历史 Run 快照，
+// 让每次对话的工具调用都留在各自消息下方，而不是只显示最后一次 Run。
+function HistoricalRunTools({ runId, onDecide }: HistoricalRunToolsProps) {
+  const snapshot = useRunSnapshot(runId).data
+  return (
+    <ToolTimeline
+      snapshot={snapshot}
+      onDecide={onDecide}
+      persistCollapse={false}
+    />
+  )
+}
+
 // ChatPanel 组合消息列表、工具时间线与输入区；权威数据来自 REST 快照，
 // SSE 增量只用于 streaming 展示。刷新恢复以最后一条带 run_id 的消息为准，
 // 终态 Run 也要恢复快照以展示工具时间线与错误信息。
@@ -170,7 +188,16 @@ export default function ChatPanel({ session }: ChatPanelProps) {
         {messagesQuery.isPending ? (
           <Empty description="加载消息中…" />
         ) : (
-          <MessageList messages={messages} deltas={deltas} reasoning={reasoning} />
+          <MessageList
+            messages={messages}
+            deltas={deltas}
+            reasoning={reasoning}
+            renderRunTools={(id) =>
+              id === runId ? null : (
+                <HistoricalRunTools runId={id} onDecide={onDecide} />
+              )
+            }
+          />
         )}
         <ToolTimeline snapshot={snapshot} onDecide={onDecide} />
       </div>

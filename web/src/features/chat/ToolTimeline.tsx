@@ -3,12 +3,16 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { RunSnapshot, ToolCallStatus, ToolCallView } from '../../api/types'
 import { useRunStore } from '../../stores/run'
+import MarkdownView from '../../components/MarkdownView'
 import TerminalBlock from '../../components/TerminalBlock'
 import ApprovalCard from './ApprovalCard'
 
 interface ToolTimelineProps {
   snapshot: RunSnapshot | undefined
   onDecide: (approvalId: string, approved: boolean, reason: string) => Promise<void>
+  // persistCollapse 为 false 时使用组件内部折叠状态，
+  // 让多条历史 Run 的时间线可以独立展开/收起。
+  persistCollapse?: boolean
 }
 
 const statusLabels: Record<ToolCallStatus, { label: string; tone: string }> = {
@@ -44,6 +48,16 @@ function formatSize(text: string): string {
     return `${bytes} B`
   }
   return `${(bytes / 1024).toFixed(1)} KB`
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`
+  }
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 // prettyJSON 只在用户主动展开时使用，保留完整参数与结果。
@@ -137,6 +151,57 @@ function codeBlock(content: string): ReactNode {
   return <pre className="tool-code">{content}</pre>
 }
 
+// fileEntryList 把 file_list 的 entries 渲染成人类可读的路径列表，
+// 不再直接把结果对象以 JSON 形式展示。
+function fileEntryList(result: Record<string, unknown> | null): ReactNode {
+  const entries = Array.isArray(result?.entries) ? result.entries : []
+  if (entries.length === 0) {
+    return <div className="tool-empty">目录为空</div>
+  }
+  return (
+    <ul className="tool-file-list">
+      {entries.map((entry, index) => {
+        const item = asRecord(entry)
+        const itemPath = stringField(item, 'path')
+        const isDir = stringField(item, 'type') === 'dir'
+        const size = typeof item?.size === 'number' ? item.size : undefined
+        return (
+          <li className="tool-file-item" key={`${itemPath}-${index}`}>
+            <span className="tool-file-icon">{isDir ? '▸' : '·'}</span>
+            <span className="tool-file-path">
+              {itemPath}
+              {isDir ? '/' : ''}
+            </span>
+            {!isDir && size !== undefined && (
+              <span className="tool-file-size">{formatBytes(size)}</span>
+            )}
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+// matchList 把 file_search 的 matches 渲染成文件路径列表。
+function matchList(result: Record<string, unknown> | null): ReactNode {
+  const matches = Array.isArray(result?.matches)
+    ? result.matches.filter((match): match is string => typeof match === 'string')
+    : []
+  if (matches.length === 0) {
+    return <div className="tool-empty">没有找到匹配的文件</div>
+  }
+  return (
+    <ul className="tool-file-list">
+      {matches.map((match) => (
+        <li className="tool-file-item" key={match}>
+          <span className="tool-file-icon">·</span>
+          <span className="tool-file-path">{match}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 // describeTool 把工具名与参数翻译成自然语言动作，并准备可展开的详情。
 // 未知工具回退为“调用工具”，避免新工具出现时时间线不可用。
 function describeTool(tool: ToolCallView): ToolDescription {
@@ -181,7 +246,7 @@ function describeTool(tool: ToolCallView): ToolDescription {
         action: '读取文件',
         target: path || '未知路径',
         meta: readContent ? `${countLines(readContent)} 行` : undefined,
-        body: field('内容', codeBlock(readContent || prettyJSON(result) || '（无内容）')),
+        body: field('内容', codeBlock(readContent || '（无内容）')),
       }
     }
     case 'file_list':
@@ -189,31 +254,39 @@ function describeTool(tool: ToolCallView): ToolDescription {
         action: '浏览目录',
         target: path || '工作区根目录',
         meta: result ? `${arrayLength(result, 'entries')} 项` : undefined,
-        body: field('条目', codeBlock(prettyJSON(result) || '（无内容）')),
+        body: field('条目', fileEntryList(result)),
       }
     case 'file_search':
       return {
         action: '搜索文件',
         target: query ? `“${query}”` : '工作区',
         meta: result ? `${arrayLength(result, 'matches')} 个结果` : undefined,
-        body: field('结果', codeBlock(prettyJSON(result) || '（无结果）')),
+        body: field('匹配', matchList(result)),
       }
     case 'file_delete':
       return {
         action: '删除文件',
         target: path || '未知路径',
-        body: field('结果', codeBlock(prettyJSON(result) || '（无结果）')),
+        body: (
+          <div className="tool-prose">
+            {tool.status === 'succeeded' ? '文件已从工作区删除。' : '删除操作尚未完成。'}
+          </div>
+        ),
       }
     case 'shell':
       return {
         action: '执行命令',
         target: command || 'shell',
       }
-    case 'submit':
+    case 'submit': {
+      const summary = stringField(result, 'summary') || stringField(args, 'summary')
       return {
-        action: '提交任务结果',
-        body: field('结果', codeBlock(prettyJSON(result) || '（无结果）')),
+        action: '任务完成',
+        body: summary
+          ? field('结论', <div className="tool-markdown"><MarkdownView content={summary} /></div>)
+          : <div className="tool-prose">本次运行已结束。</div>,
       }
+    }
     default:
       return {
         action: '调用工具',
@@ -299,9 +372,16 @@ function ToolRow({ tool }: ToolRowProps) {
 }
 
 // ToolTimeline 展示审批与工具调用；整体可收起，单条工具可展开详情。
-export default function ToolTimeline({ snapshot, onDecide }: ToolTimelineProps) {
-  const collapsed = useRunStore((state) => state.timelineCollapsed)
-  const setCollapsed = useRunStore((state) => state.setTimelineCollapsed)
+export default function ToolTimeline({
+  snapshot,
+  onDecide,
+  persistCollapse = true,
+}: ToolTimelineProps) {
+  const storedCollapsed = useRunStore((state) => state.timelineCollapsed)
+  const setStoredCollapsed = useRunStore((state) => state.setTimelineCollapsed)
+  const [localCollapsed, setLocalCollapsed] = useState(false)
+  const collapsed = persistCollapse ? storedCollapsed : localCollapsed
+  const setCollapsed = persistCollapse ? setStoredCollapsed : setLocalCollapsed
   if (!snapshot || (snapshot.tool_calls.length === 0 && snapshot.approvals.length === 0)) {
     return null
   }

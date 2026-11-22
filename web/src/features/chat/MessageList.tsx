@@ -1,4 +1,5 @@
 import { Empty } from 'antd'
+import type { ReactNode } from 'react'
 import type { MessageView } from '../../api/types'
 import MarkdownView from '../../components/MarkdownView'
 
@@ -6,6 +7,9 @@ interface MessageListProps {
   messages: MessageView[]
   deltas: Record<string, string>
   reasoning: Record<string, string>
+  // renderRunTools 在助手消息下渲染该 Run 的工具时间线，
+  // 避免后续 Run 覆盖后历史工具调用消失。
+  renderRunTools?: (runId: string) => ReactNode
 }
 
 // mergeStreamingText 合并权威 content 与本地增量：服务端先写库后发 delta，
@@ -25,7 +29,12 @@ function mergeStreamingText(content: string, delta: string): string {
 
 // MessageList 渲染消息 content（streaming 时拼接本地增量）与模型思考过程；
 // 角色标签与消息块类名供主题 CSS 区分用户/助手样式。
-export default function MessageList({ messages, deltas, reasoning }: MessageListProps) {
+export default function MessageList({
+  messages,
+  deltas,
+  reasoning,
+  renderRunTools,
+}: MessageListProps) {
   if (messages.length === 0) {
     return <Empty description="暂无消息" />
   }
@@ -54,6 +63,7 @@ export default function MessageList({ messages, deltas, reasoning }: MessageList
               </details>
             )}
             <MarkdownView content={content} />
+            {message.role !== 'user' && message.run_id && renderRunTools?.(message.run_id)}
           </div>
         )
       })}

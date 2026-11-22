@@ -103,6 +103,15 @@ const streamingMessage: MessageView = {
   status: 'streaming',
   created_at: '2026-11-18T10:00:01Z',
 }
+const oldTool: ToolCallView = {
+  id: 'tc-old',
+  run_id: 'r0',
+  name: 'file_write',
+  arguments_json: { path: 'old.txt', content: 'hello' },
+  status: 'succeeded',
+  result_json: { path: 'old.txt' },
+  created_at: '2026-11-18T09:59:00Z',
+}
 
 function makeSnapshot(status: RunStatus, runId = 'r1'): RunSnapshot {
   return {
@@ -182,6 +191,9 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   if (url === '/api/v1/runs/r1' && method === 'GET') {
     runFetchCount += 1
     return ok(snapshot)
+  }
+  if (url === '/api/v1/runs/r0' && method === 'GET') {
+    return ok({ ...makeSnapshot('failed', 'r0'), tool_calls: [oldTool] })
   }
   if (url === '/api/v1/runs/r2' && method === 'GET') {
     return ok(makeSnapshot('succeeded', 'r2'))
@@ -374,7 +386,7 @@ describe('ChatPanel', () => {
     renderWithProviders(<ChatPanel session={session} />)
     expect(await screen.findByText('快速完成。')).toBeVisible()
     expect(screen.queryByText('已取消')).not.toBeInTheDocument()
-    expect(calls.some((call) => call.url === '/api/v1/runs/r1')).toBe(false)
+    expect(calls.some((call) => call.url === '/api/v1/runs/r2')).toBe(true)
   })
 
   it('停止弹窗取消不发送取消请求', async () => {
@@ -541,6 +553,57 @@ describe('ChatPanel', () => {
     await userEvent.click(summary)
     expect(screen.getByText('查看原始参数与结果')).toBeVisible()
     expect(screen.getByText('hello')).toBeVisible()
+  })
+
+  it('历史 Run 的工具调用显示在对应助手消息下', async () => {
+    messages = [
+      {
+        id: 'm0',
+        run_id: 'r0',
+        session_seq: 0,
+        role: 'user',
+        content: '第一次任务',
+        status: 'completed',
+        created_at: '2026-11-18T09:59:00Z',
+      },
+      {
+        id: 'm0a',
+        run_id: 'r0',
+        session_seq: 1,
+        role: 'assistant',
+        content: '第一次完成',
+        status: 'completed',
+        created_at: '2026-11-18T09:59:01Z',
+      },
+      userMessage,
+      streamingMessage,
+    ]
+    renderWithProviders(<ChatPanel session={session} />)
+    expect(await screen.findByText('第一次完成')).toBeVisible()
+    expect(await screen.findByText('写入文件')).toBeVisible()
+    expect(screen.getByText('old.txt')).toBeVisible()
+  })
+
+  it('任务完成展示可读摘要而不是 JSON', async () => {
+    const summary = '登录页已完成\n- 表单校验\n- 错误提示'
+    const toolCall: ToolCallView = {
+      id: 'tc-submit',
+      run_id: 'r1',
+      name: 'submit',
+      arguments_json: { summary },
+      status: 'succeeded',
+      result_json: { summary },
+      created_at: '2026-11-18T10:00:00Z',
+    }
+    snapshot = { ...makeSnapshot('succeeded'), tool_calls: [toolCall] }
+    renderWithProviders(<ChatPanel session={session} />)
+    expect(await screen.findByText('任务完成')).toBeVisible()
+
+    await userEvent.click(screen.getByRole('button', { name: /任务完成/ }))
+    const prose = document.querySelector('.tool-markdown')
+    expect(prose).toBeVisible()
+    expect(prose).toHaveTextContent('登录页已完成')
+    expect(prose).toHaveTextContent('表单校验')
   })
 
   it('streaming 增量与已刷盘 content 重叠去重，不重复拼接', async () => {
