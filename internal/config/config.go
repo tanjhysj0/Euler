@@ -22,14 +22,17 @@ const (
 	defaultMaxOutput    = 64 * 1024
 	defaultShellTimeout = 2 * time.Minute
 	defaultShellOutput  = 1024 * 1024
-	defaultModelTimeout = 120 * time.Second
-	defaultPreview      = 1024 * 1024
-	defaultLangfuseEnv  = "local"
-	minAgentDuration    = time.Nanosecond
-	minAgentOutput      = 1024
-	noAgentLimit        = 0
-	noDuration          = time.Duration(0)
-	emptyValue          = ""
+	// defaultModelTimeout 是单次模型请求的空闲超时。
+	defaultModelTimeout = 10 * time.Second
+	// defaultModelRequestTimeout 是单次模型请求的总时长上限。
+	defaultModelRequestTimeout = 5 * time.Minute
+	defaultPreview             = 1024 * 1024
+	defaultLangfuseEnv         = "local"
+	minAgentDuration           = time.Nanosecond
+	minAgentOutput             = 1024
+	noAgentLimit               = 0
+	noDuration                 = time.Duration(0)
+	emptyValue                 = ""
 )
 
 // validReasoningEffort 限制可透传的推理强度取值。
@@ -61,16 +64,17 @@ func (l LangfuseConfig) Enabled() bool { return l.Host != emptyValue }
 // Config 是完整的运行时配置。数据库 URL 与 Langfuse 密钥只从环境变量读取，
 // 绝不会被序列化。
 type Config struct {
-	Listen           string         `yaml:"listen"`
-	WorkspaceRoot    string         `yaml:"workspace_root"`
-	AllowedOrigins   []string       `yaml:"allowed_origins"`
-	DatabaseURL      string         `yaml:"-"`
-	Langfuse         LangfuseConfig `yaml:"langfuse"`
-	Agent            AgentLimits    `yaml:"agent"`
-	ShellTimeout     time.Duration  `yaml:"shell_timeout"`
-	ShellOutputBytes int            `yaml:"shell_output_bytes"`
-	ShellPathPrefix  string         `yaml:"shell_path_prefix"`
-	ModelTimeout     time.Duration  `yaml:"model_timeout"`
+	Listen              string         `yaml:"listen"`
+	WorkspaceRoot       string         `yaml:"workspace_root"`
+	AllowedOrigins      []string       `yaml:"allowed_origins"`
+	DatabaseURL         string         `yaml:"-"`
+	Langfuse            LangfuseConfig `yaml:"langfuse"`
+	Agent               AgentLimits    `yaml:"agent"`
+	ShellTimeout        time.Duration  `yaml:"shell_timeout"`
+	ShellOutputBytes    int            `yaml:"shell_output_bytes"`
+	ShellPathPrefix     string         `yaml:"shell_path_prefix"`
+	ModelTimeout        time.Duration  `yaml:"model_timeout"`
+	ModelRequestTimeout time.Duration  `yaml:"model_request_timeout"`
 	// ModelReasoningEffort 为空时使用模型默认强度；可选 low/medium/high/max。
 	ModelReasoningEffort string `yaml:"model_reasoning_effort"`
 	// SystemPromptTemplate 选择 internal/agent/prompts/<name>.md 模板；
@@ -123,6 +127,7 @@ func Default() Config {
 		ShellTimeout:         defaultShellTimeout,
 		ShellOutputBytes:     defaultShellOutput,
 		ModelTimeout:         defaultModelTimeout,
+		ModelRequestTimeout:  defaultModelRequestTimeout,
 		SystemPromptTemplate: defaultPrompt,
 		PreviewBytes:         defaultPreview,
 		Langfuse:             LangfuseConfig{Environment: defaultLangfuseEnv},
@@ -162,6 +167,9 @@ func (c Config) validateRuntime() error {
 	}
 	if c.ModelTimeout <= noDuration {
 		return errors.New("model_timeout must be positive")
+	}
+	if c.ModelRequestTimeout <= noDuration {
+		return errors.New("model_request_timeout must be positive")
 	}
 	if c.ModelReasoningEffort != emptyValue && !validReasoningEffort[c.ModelReasoningEffort] {
 		return errors.New("model_reasoning_effort must be low, medium, high or max")

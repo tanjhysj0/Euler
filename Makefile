@@ -12,6 +12,10 @@ EULER_DATABASE_URL ?= postgres://euler:euler@127.0.0.1:5432/euler?sslmode=disabl
 EULER_MODEL_BASE_URL ?= https://api.deepseek.com
 EULER_MODEL ?= deepseek-v4-flash
 EULER_REASONING_EFFORT ?= high
+# 模型请求的空闲超时：首 token 或流中途超过该时长没有数据即失败。
+EULER_MODEL_TIMEOUT ?= 10s
+# 单次模型请求的总时长上限。
+EULER_MODEL_REQUEST_TIMEOUT ?= 5m
 
 # harbor-test 默认覆盖的编码数据集；可用命令行或环境变量覆盖。
 # 注意：programbench 与 swe-marathon 的任务声明了 [agent] network_mode，
@@ -33,8 +37,9 @@ HARBOR_TASKS ?=
 # 精选任务清单（每行一个仓库相对路径）；HARBOR_TASKS 为空时使用。
 HARBOR_TASKS_FILE ?= harbor_eval/tasks/selected-tasks.txt
 HARBOR_SELECTED ?= $(shell grep -v '^\#' $(HARBOR_TASKS_FILE) 2>/dev/null | sed '/^$$/d')
-# harbor-test-all 定死的三组精选清单，各 10 个任务（共 30 个）；
-# 不读取 HARBOR_DATASETS / HARBOR_TASKS / selected-tasks.txt，避免任务集合漂移。
+# harbor-test（以及兼容别名 harbor-test-all）定死的三组精选清单，
+# 各 10 个任务（共 30 个）；不读取 HARBOR_DATASETS / HARBOR_TASKS /
+# selected-tasks.txt，避免任务集合漂移。
 HARBOR_FIXED_EASY := harbor_eval/tasks/selected-easy.txt
 HARBOR_FIXED_MEDIUM := harbor_eval/tasks/selected-medium.txt
 HARBOR_FIXED_HARD := harbor_eval/tasks/selected-hard.txt
@@ -215,6 +220,8 @@ harbor-test-run: harbor-clean
 		export EULER_MODEL_BASE_URL='$(EULER_MODEL_BASE_URL)'; \
 		export EULER_MODEL='$(EULER_MODEL)'; \
 		export EULER_REASONING_EFFORT='$(EULER_REASONING_EFFORT)'; \
+		export EULER_MODEL_TIMEOUT='$(EULER_MODEL_TIMEOUT)'; \
+		export EULER_MODEL_REQUEST_TIMEOUT='$(EULER_MODEL_REQUEST_TIMEOUT)'; \
 		model_host=$$(printf '%s' '$(EULER_MODEL_BASE_URL)' | sed -E 's#^[a-z]+://##; s#/.*$$##'); \
 		allow_args="--allow-agent-host $$model_host"; \
 		langfuse_url="$${LANGFUSE_HOST:-$${LANGFUSE_BASE_URL:-}}"; \

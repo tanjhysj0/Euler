@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -34,13 +36,21 @@ const (
 	codeModelRoundLimit  = "model_round_limit"
 	codeModelTimeout     = "model_timeout"
 
-	defaultModelTimeout = 120 * time.Second
+	// defaultModelTimeout 是单次模型请求的空闲超时。
+	defaultModelTimeout = 10 * time.Second
+	// defaultModelRequestTimeout 是单次模型请求的总时长上限。
+	defaultModelRequestTimeout = 5 * time.Minute
 
 	maxModelRetries = 2
 	firstAttempt    = 0
 	singleModelCall = 1
 	firstRetryWait  = 100 * time.Millisecond
 	secondRetryWait = 200 * time.Millisecond
+
+	// modelKeepAlive 是模型 HTTP 连接的 TCP keepalive 周期。
+	modelKeepAlive = 30 * time.Second
+	// noBytesRead 表示读取失败时没有返回任何字节。
+	noBytesRead = 0
 
 	noStatus           = 0
 	statusUnauthorized = 401
@@ -56,8 +66,12 @@ const (
 
 // OpenAIChatModelFactory 构建真实的 OpenAI 兼容 chat 模型。
 type OpenAIChatModelFactory struct {
-	// Timeout 是单次模型请求的截止时间；零值使用默认值。
+	// Timeout 是单次模型请求的“空闲超时”：建连后任意一次读超过该时长仍无
+	// 数据即失败，覆盖首 token 等待与流中途停顿。零值使用默认值。
 	Timeout time.Duration
+	// RequestTimeout 是单次模型请求的总时长上限，覆盖整个流式响应；
+	// 零值使用默认值。
+	RequestTimeout time.Duration
 	// ReasoningEffort 非空时透传给模型，如 low/medium/high/max。
 	ReasoningEffort string
 }
@@ -66,15 +80,21 @@ type OpenAIChatModelFactory struct {
 func (f OpenAIChatModelFactory) New(
 	ctx context.Context, spec ModelSpec,
 ) (model.ToolCallingChatModel, error) {
-	timeout := f.Timeout
-	if timeout <= zeroTimeout {
-		timeout = defaultModelTimeout
+	idleTimeout := f.Timeout
+	if idleTimeout <= zeroTimeout {
+		idleTimeout = defaultModelTimeout
+	}
+	requestTimeout := f.RequestTimeout
+	if requestTimeout <= zeroTimeout {
+		requestTimeout = defaultModelRequestTimeout
 	}
 	config := &openai.ChatModelConfig{
 		APIKey:  spec.APIKey,
 		BaseURL: spec.BaseURL,
 		Model:   spec.Model,
-		Timeout: timeout,
+		// 用自定义 HTTPClient 实现空闲与总时长双重超时；设置后组件自身的
+		// Timeout 不再生效。
+		HTTPClient: newModelHTTPClient(idleTimeout, requestTimeout),
 	}
 	if f.ReasoningEffort != "" {
 		// 通过 ExtraFields 透传，兼容 low/high/max 等厂商自有取值
@@ -87,6 +107,42 @@ func (f OpenAIChatModelFactory) New(
 		return nil, fmt.Errorf("create openai model: %w", err)
 	}
 	return chatModel, nil
+}
+
+// newModelHTTPClient 创建同时限制“空闲”和“总时长”的 HTTP 客户端：
+// 任意一次读超过 idle 没有数据就失败；整个请求超过 total 也失败。
+func newModelHTTPClient(idle, total time.Duration) *http.Client {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return &http.Client{Transport: http.DefaultTransport, Timeout: total}
+	}
+	transport := base.Clone()
+	dialer := &net.Dialer{Timeout: idle, KeepAlive: modelKeepAlive}
+	transport.DialContext = func(
+		ctx context.Context, network, address string,
+	) (net.Conn, error) {
+		conn, err := dialer.DialContext(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return &idleTimeoutConn{Conn: conn, idle: idle}, nil
+	}
+	transport.TLSHandshakeTimeout = idle
+	return &http.Client{Transport: transport, Timeout: total}
+}
+
+// idleTimeoutConn 在每次读之前设置读截止时间，实现空闲超时。
+type idleTimeoutConn struct {
+	net.Conn
+	idle time.Duration
+}
+
+// Read 在读取前刷新截止时间；TLS 握手和流式响应都走这里。
+func (c *idleTimeoutConn) Read(p []byte) (int, error) {
+	if err := c.SetReadDeadline(time.Now().Add(c.idle)); err != nil {
+		return noBytesRead, err
+	}
+	return c.Conn.Read(p)
 }
 
 // roundLimitedModel 限制 Generate 和 Stream 的调用次数，覆盖 ReAct 图通过
@@ -218,7 +274,7 @@ func (m *retryModel) WithTools(
 // mapError 区分“run 截止”与“单次模型请求超时”：前者保留 context 错误，
 // 后者映射为 model_timeout，避免归因成 run_timeout。
 func (m *retryModel) mapError(ctx context.Context, err error) error {
-	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+	if ctx.Err() == nil && isModelTimeout(err) {
 		return &tools.CodedError{
 			Code: codeModelTimeout,
 			Msg:  "model request timed out",
@@ -247,7 +303,7 @@ func wrapStreamErrors(
 	return schema.StreamReaderWithConvert(stream,
 		func(msg *schema.Message) (*schema.Message, error) { return msg, nil },
 		schema.WithErrWrapper(func(err error) error {
-			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			if ctx.Err() == nil && isModelTimeout(err) {
 				return &tools.CodedError{
 					Code: codeModelTimeout,
 					Msg:  "model stream timed out",
@@ -296,6 +352,8 @@ func mapModelError(err error, apiKey string) error {
 	code := codeModelProtocol
 	if status, ok := httpStatus(err); ok {
 		code = statusErrorCode(status)
+	} else if isStreamTimeout(err) {
+		code = codeModelTimeout
 	} else if networkError(err) {
 		code = codeModelUnavailable
 	}
@@ -335,6 +393,19 @@ func httpStatus(err error) (int, bool) {
 		return reqErr.HTTPStatusCode, true
 	}
 	return noStatus, false
+}
+
+// isModelTimeout 判断是否为单次模型请求超时：context 截止或 socket 空闲超时。
+func isModelTimeout(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || isStreamTimeout(err)
+}
+
+// isStreamTimeout 判断是否为 socket 读超时；它对应空闲超时，不应归类为
+// 网络不可用或协议错误。
+func isStreamTimeout(err error) bool {
+	var netErr net.Error
+	return errors.Is(err, os.ErrDeadlineExceeded) ||
+		(errors.As(err, &netErr) && netErr.Timeout())
 }
 
 func networkError(err error) bool {

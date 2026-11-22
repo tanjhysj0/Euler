@@ -116,6 +116,15 @@ export EULER_LANGFUSE_SECRET_KEY='sk-...'
 ### 3. 启动
 
 ```bash
+# 一键启动：数据库 + 后端 8080 + 前端 5173
+make start
+
+# 一键停止：前端、后端、数据库
+make stop
+
+# 重新构建前后端并重启三者
+make restart
+
 # 后端（默认 127.0.0.1:8080）
 make dev-api
 
@@ -142,7 +151,7 @@ make build     # 构建 bin/euler
 ### 4. 常用检查
 
 ```bash
-make test      # go test ./...
+make test      # go test ./...（含 internal/api 的 API 测试）
 make lint      # golangci-lint run --timeout=5m ./...
 make web-test  # 前端单测
 make test-e2e  # Playwright 端到端测试
@@ -164,7 +173,8 @@ make test-e2e  # Playwright 端到端测试
 | `shell_timeout` | `2m` | 单条 shell 命令超时 |
 | `shell_output_bytes` | `1MiB` | 单条命令输出上限 |
 | `shell_path_prefix` | 空 | 注入到 PATH 最前的目录 |
-| `model_timeout` | `120s` | 单次模型请求超时 |
+| `model_timeout` | `10s` | 单次模型请求的空闲超时 |
+| `model_request_timeout` | `5m` | 单次模型请求的总时长上限 |
 | `model_reasoning_effort` | 空 | `low` / `medium` / `high` / `max` |
 | `system_prompt_template` | `coding` | 提示词模板名 |
 | `preview_bytes` | `1MiB` | 文件预览上限 |
@@ -214,6 +224,10 @@ make harbor-test-easy    # 简单组（10 个任务）
 make harbor-test-medium  # 中等组（10 个任务）
 make harbor-test-hard    # 困难组（10 个任务）
 make harbor-test-all     # 同 harbor-test，兼容旧用法
+
+make harbor-check-selected  # 校验三份清单恰好 30 个任务
+make harbor-download        # 补齐缺失任务目录（harbor-test 会自动调用）
+make harbor-clean           # 清理残留评测容器与网络（harbor-test 前后自动调用）
 ```
 
 任务清单位于：
@@ -225,82 +239,84 @@ make harbor-test-all     # 同 harbor-test，兼容旧用法
 
 - 容器内 Agent 默认 **模型轮次与工具调用都不设限**（`-max-rounds 0`、`-max-tool-calls 0`），单次运行 600 秒
 - 可用 `EULER_MAX_MODEL_ROUNDS`、`EULER_MAX_TOOL_CALLS`、`EULER_MAX_DURATION_SEC` 收紧预算；下文评测结果的工具调用上限为 120
-- 单次模型请求超时 120 秒
+- 单次模型请求有双重超时：**空闲超时** 10 秒（首 token 或流中途超过 10 秒没有数据即失败），**总时长上限** 5 分钟；Harbor 评测可用 `EULER_MODEL_TIMEOUT`、`EULER_MODEL_REQUEST_TIMEOUT` 调整
+- 任务容器内会自动上传宿主机 CA bundle，并通过 `SSL_CERT_FILE` 供 agent 校验证书，兼容缺少 `ca-certificates` 的镜像
 - Harbor agent 阶段硬超时 780 秒（600s agent 预算 + 120s exec 余量 + 60s 结果回传余量）
 
 运行结果写入 `harbor_eval/results/<run_id>/`，每个 trial 目录下包含 `agent/result.json`、`verifier/reward.txt` 与 `verifier/test-stdout.txt`。
 
 ### 评测结果
 
-以下为 2026-11-21 在本机实际运行的结果：`deepseek-v4-flash` + `EULER_REASONING_EFFORT=high`，macOS arm64 Docker Desktop，并发 4，每个任务只采样 1 次（n=1）。`harbor_eval/results/` 已被 `.gitignore` 排除，结果目录不会进入仓库，因此在这里贴出汇总数据。
+以下为 2026-11-22 在本机实际运行的结果：`deepseek-v4-flash` + `EULER_REASONING_EFFORT=high`，macOS arm64 Docker Desktop，并发 4，每个任务只采样 1 次（n=1）。该批次已包含容器内 CA bundle 上传、10 秒空闲超时与 5 分钟单次请求总时长限制。`harbor_eval/results/` 已被 `.gitignore` 排除，结果目录不会进入仓库，因此在这里贴出汇总数据。
 
 | 任务组 | 通过 | 通过率 | 平均耗时 | 中位耗时 | 时间窗口 |
 |---|---|---|---|---|---|
-| 简单组（easy） | **10/10** | 100% | 8.4s | 8.7s | 17:32 → 17:34 |
-| 中等组（medium） | **9/10** | 90% | 13.9s | 9.4s | 17:34 → 17:36 |
-| 困难组（hard） | **5/10** | 50% | 281.1s | 185.4s | 17:36 → 17:54 |
-| 三组合计 | **24/30** | 80% | — | — | — |
-| 默认快速回归集 | **9/10** | 90% | 30.4s | 9.8s | 21:15 → 21:19 |
+| 简单组（easy） | **10/10** | 100% | 8.9s | 7.9s | 18:34 → 18:36 |
+| 中等组（medium） | **9/10** | 90% | 13.6s | 8.0s | 18:36 → 18:39 |
+| 困难组（hard） | **8/10** | 80% | 350.1s | 378.5s | 18:39 → 19:02 |
+| 三组合计 | **27/30** | 90% | — | — | 18:34 → 19:02 |
+| 快速回归集（`harbor-test-fast`） | **10/10** | 100% | 100.3s | 12.0s | 17:01 → 17:12 |
 
 #### 简单组（`selected-easy.txt`，10/10）
 
 | 任务 | 结果 | 耗时 | 工具调用 |
 |---|---|---|---|
-| `humanevalfix/python-1` | ✅ | 10.1s | 7 |
-| `humanevalfix/python-3` | ✅ | 6.6s | 5 |
-| `humanevalfix/python-8` | ✅ | 9.0s | 7 |
-| `humanevalfix/python-11` | ✅ | 6.1s | 5 |
-| `humanevalfix/python-12` | ✅ | 5.5s | 5 |
-| `humanevalfix/python-15` | ✅ | 11.6s | 9 |
-| `humanevalfix/python-17` | ✅ | 6.5s | 5 |
-| `humanevalfix/python-18` | ✅ | 8.4s | 6 |
-| `humanevalfix/python-20` | ✅ | 9.6s | 5 |
-| `humanevalfix/python-21` | ✅ | 10.2s | 8 |
+| `humanevalfix/python-1` | ✅ | 8.8s | 6 |
+| `humanevalfix/python-3` | ✅ | 6.8s | 5 |
+| `humanevalfix/python-8` | ✅ | 6.7s | 6 |
+| `humanevalfix/python-11` | ✅ | 6.7s | 7 |
+| `humanevalfix/python-12` | ✅ | 7.3s | 6 |
+| `humanevalfix/python-15` | ✅ | 7.9s | 8 |
+| `humanevalfix/python-17` | ✅ | 7.8s | 6 |
+| `humanevalfix/python-18` | ✅ | 14.6s | 8 |
+| `humanevalfix/python-20` | ✅ | 12.1s | 8 |
+| `humanevalfix/python-21` | ✅ | 10.6s | 7 |
 
 #### 中等组（`selected-medium.txt`，9/10）
 
 | 任务 | 结果 | 耗时 | 工具调用 | 备注 |
 |---|---|---|---|---|
-| `humanevalfix/python-0` | ✅ | 9.9s | 6 | |
-| `humanevalfix/python-2` | ✅ | 8.9s | 6 | |
-| `humanevalfix/python-4` | ✅ | 7.4s | 5 | |
-| `humanevalfix/python-5` | ✅ | 9.0s | 6 | |
-| `humanevalfix/python-6` | ✅ | 12.3s | 7 | |
-| `humanevalfix/python-7` | ✅ | 8.0s | 6 | |
-| `humanevalfix/python-9` | ✅ | 7.8s | 6 | |
-| `humanevalfix/python-10` | ✅ | 12.6s | 9 | |
-| `aider-polyglot/polyglot_python_affine-cipher` | ✅ | 40.9s | 8 | |
-| `aider-polyglot/polyglot_python_beer-song` | ❌ | 22.5s | 9 | 该任务在其它批次中可通过，属模型波动 |
+| `humanevalfix/python-0` | ✅ | 7.7s | 5 | |
+| `humanevalfix/python-2` | ✅ | 7.1s | 6 | |
+| `humanevalfix/python-4` | ✅ | 8.3s | 6 | |
+| `humanevalfix/python-5` | ✅ | 7.4s | 6 | |
+| `humanevalfix/python-6` | ✅ | 9.2s | 7 | |
+| `humanevalfix/python-7` | ✅ | 6.5s | 5 | |
+| `humanevalfix/python-9` | ✅ | 7.4s | 6 | |
+| `humanevalfix/python-10` | ✅ | 15.2s | 7 | |
+| `aider-polyglot/polyglot_python_affine-cipher` | ✅ | 45.4s | 16 | |
+| `aider-polyglot/polyglot_python_beer-song` | ❌ | 21.3s | 9 | 返回 `list[段落]` 而非 `list[行]`，8 个结构断言失败；该任务在其它批次可通过 |
 
-#### 困难组（`selected-hard.txt`，5/10）
+#### 困难组（`selected-hard.txt`，8/10）
 
 | 任务 | 结果 | 耗时 | 工具调用 | 备注 |
 |---|---|---|---|---|
-| `tb21-systems-security/feal-linear-cryptanalysis` | ✅ | 193.2s | 30 | |
-| `tb21-systems-security/fix-code-vulnerability` | ✅ | 29.7s | 18 | |
-| `tb21-systems-security/configure-git-webserver` | ✅ | 158.7s | 25 | |
-| `tb21-systems-security/password-recovery` | ✅ | 177.7s | 35 | |
-| `tb21-code-debug/path-tracing-reverse` | ✅ | 329.5s | 31 | |
-| `tb21-code-debug/gpt2-codegolf` | ❌ | 600.0s | 57 | 用满 600s 预算 |
-| `tb21-data-science/llm-inference-batching-scheduler` | ❌ | 600.0s | 32 | 用满 600s 预算 |
-| `tb21-code-debug/make-mips-interpreter` | ❌ | 600.1s | 78 | 用满 600s 预算 |
-| `tb21-systems-security/model-extraction-relu-logits` | ❌ | 121.2s | 2 | 模型流超时（`model_timeout`） |
-| `tb21-code-debug/write-compressor` | ❌ | 0.5s | 0 | 容器内 TLS 证书校验失败，模型不可用（`model_unavailable`） |
+| `tb21-systems-security/feal-linear-cryptanalysis` | ✅ | 340.2s | 25 | |
+| `tb21-systems-security/fix-code-vulnerability` | ✅ | 42.6s | 22 | |
+| `tb21-systems-security/configure-git-webserver` | ✅ | 167.9s | 23 | |
+| `tb21-systems-security/password-recovery` | ✅ | 73.9s | 19 | |
+| `tb21-code-debug/path-tracing-reverse` | ✅ | 416.8s | 42 | 上一批次因模型流超时失败 |
+| `tb21-data-science/llm-inference-batching-scheduler` | ✅ | 547.4s | 59 | 上一批次用满 600s |
+| `tb21-systems-security/model-extraction-relu-logits` | ✅ | 438.1s | 32 | 上一批次因模型流超时失败 |
+| `tb21-code-debug/write-compressor` | ✅ | 273.7s | 23 | 上一批次因容器内 TLS 证书失败 |
+| `tb21-code-debug/gpt2-codegolf` | ❌ | 600.0s | 41 | 用满 600s 预算（`run_timeout`） |
+| `tb21-code-debug/make-mips-interpreter` | ❌ | 600.0s | 98 | 用满 600s 预算（`run_timeout`） |
 
-#### 默认快速回归集（`selected-tasks.txt`，9/10）
+#### 快速回归集（`selected-tasks.txt`，`harbor-test-fast`，10/10）
 
 | 任务 | 结果 | 耗时 | 工具调用 |
 |---|---|---|---|
-| `terminal-bench/cancel-async-tasks` | ✅ | 74.5s | 13 |
-| `terminal-bench/headless-terminal` | ✅ | 139.2s | 17 |
-| `humanevalfix/python-0` ~ `python-5`（6 个） | ✅ | 7.4s ~ 10.1s | 4 ~ 8 |
-| `aider-polyglot/polyglot_python_beer-song` | ✅ | 22.9s | 8 |
-| `aider-polyglot/polyglot_python_affine-cipher` | ❌ | 17.1s | 8 |
+| `terminal-bench/cancel-async-tasks` | ✅ | 573.1s | 26 |
+| `terminal-bench/headless-terminal` | ✅ | 293.2s | 35 |
+| `humanevalfix/python-0` ~ `python-5`（6 个） | ✅ | 7.9s ~ 12.1s | 5 ~ 8 |
+| `aider-polyglot/polyglot_python_beer-song` | ✅ | 46.6s | 12 |
+| `aider-polyglot/polyglot_python_affine-cipher` | ✅ | 31.3s | 9 |
 
 结论与已知波动：
 
-- 简单组可稳定全通过；中等组 `affine-cipher` / `beer-song` 会随采样波动（不同批次分别出现过通过和失败），需要更大样本量才能给出可靠准确率。
-- 困难组失败的 5 个任务中，3 个是预算耗尽，1 个是模型流超时，1 个是容器内 TLS 证书问题导致的模型不可用；后者属于环境问题，重跑即可排除。
+- 简单组可稳定全通过；中等组 `beer-song` 波动较大（最近 3 次采样 1 次通过），主要原因是模型对 `recite()` 返回值层级理解不稳定：正确结构是按行展开的 `list[str]`（段间含空字符串），错误时返回 `list[段落]`。
+- 困难组 8/10：失败的两个任务都是 600 秒预算耗尽（`run_timeout`），不是环境异常。
+- 上一批次暴露的两类环境问题已修复：任务容器内缺少 CA 根证书导致的 `model_unavailable`，以及模型流超时；本批次没有再出现这两类错误。
 - `headless-terminal` 的 `test_background_commands` 也有偶发失败（服务未启动），复跑可通过。
 
 ## 设计说明与限制
@@ -308,4 +324,4 @@ make harbor-test-all     # 同 harbor-test，兼容旧用法
 - **本地优先**：服务只监听 loopback，模型密钥保存在 Keychain，数据库地址只从环境变量读取。
 - **审批默认关闭**：`cmd/euler` 当前使用 `AutoApprove`；需要人工确认高风险工具时，把 `Gate` 换回 `approvals` 服务即可。
 - **评测镜像来源**：部分任务镜像只有 amd64 清单，在 arm64 机器上通过 Docker 模拟运行；Docker Hub 匿名限流时可用 `mirror.gcr.io` 拉取后重新打标签。
-- **困难任务耗时**：困难组中 `gpt2-codegolf`、`make-mips-interpreter`、`llm-inference-batching-scheduler` 会用满 10 分钟预算仍未完成，这是任务复杂度而非环境问题；个别 trial 会因容器内 TLS 证书或模型流超时而失败，需要通过 `agent/result.json` 的 `error_code` 区分环境失败与任务失败。
+- **困难任务耗时**：`gpt2-codegolf`、`make-mips-interpreter` 等任务可能用满 600 秒预算仍未完成，这是任务复杂度而非环境问题；容器内 CA 证书缺失与模型流超时已分别通过上传宿主机 CA bundle、10 秒空闲超时 + 5 分钟单次请求总时长处理，仍可通过 `agent/result.json` 的 `error_code` 区分预算耗尽（`run_timeout`）、模型超时（`model_timeout`）与环境失败。

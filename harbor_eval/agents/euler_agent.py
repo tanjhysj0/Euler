@@ -10,6 +10,7 @@ import json
 import os
 import posixpath
 import shlex
+import ssl
 from pathlib import Path
 
 from harbor.agents.base import BaseAgent
@@ -23,6 +24,18 @@ REMOTE_DIR = "/tmp/euler"
 REMOTE_BINARY = f"{REMOTE_DIR}/euler-agent"
 REMOTE_INSTRUCTION = f"{REMOTE_DIR}/instruction.txt"
 REMOTE_RESULT = f"{REMOTE_DIR}/result.json"
+# 容器内 CA bundle：部分任务镜像没有 ca-certificates，需上传宿主机的信任库。
+REMOTE_CA_BUNDLE = f"{REMOTE_DIR}/ca-bundle.pem"
+# 单次模型请求的空闲超时：首 token 或流中途超过该时长没有数据即失败。
+DEFAULT_MODEL_TIMEOUT = "10s"
+# 单次模型请求的总时长上限，覆盖整个流式响应。
+DEFAULT_MODEL_REQUEST_TIMEOUT = "5m"
+# 宿主机常见的 CA bundle 位置，按优先级探测。
+CA_BUNDLE_CANDIDATES = (
+    "/etc/ssl/cert.pem",
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+)
 # 容器架构别名到构建产物后缀的映射。
 ARCH_ALIASES = {
     "x86_64": "amd64",
@@ -68,6 +81,22 @@ def build_instruction(instruction: str, workdir: str) -> str:
     return f"{prefix}\n\n{EXECUTION_GUIDANCE}\n\n{instruction}"
 
 
+def host_ca_bundle() -> Path | None:
+    """返回宿主机可用的 CA bundle；优先 EULER_TLS_CA_FILE，找不到返回 None。"""
+    candidates: list[Path] = []
+    override = os.environ.get("EULER_TLS_CA_FILE")
+    if override:
+        candidates.append(Path(override))
+    default = ssl.get_default_verify_paths()
+    if default.cafile:
+        candidates.append(Path(default.cafile))
+    candidates.extend(Path(path) for path in CA_BUNDLE_CANDIDATES)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def validate_workdir(workdir: str) -> str:
     """校验容器工作目录，拒绝空值、相对路径与危险根路径。"""
     if not workdir or not workdir.startswith("/"):
@@ -110,6 +139,15 @@ class EulerAgent(BaseAgent):
             or os.environ.get("OPENAI_API_KEY")
             or ""
         )
+        self.model_timeout = (
+            os.environ.get("EULER_MODEL_TIMEOUT") or DEFAULT_MODEL_TIMEOUT
+        )
+        self.model_request_timeout = (
+            os.environ.get("EULER_MODEL_REQUEST_TIMEOUT")
+            or DEFAULT_MODEL_REQUEST_TIMEOUT
+        )
+        # setup 成功上传 CA bundle 后才在容器内设置 SSL_CERT_FILE。
+        self._ca_bundle_uploaded = False
 
     def version(self) -> str:
         return "0.2.0"
@@ -122,6 +160,12 @@ class EulerAgent(BaseAgent):
         if result.return_code != 0:
             raise RuntimeError(f"create remote dir failed: {result.stderr}")
         await environment.upload_file(binary, REMOTE_BINARY)
+        # 任务镜像可能缺少 CA 根证书（例如 write-compressor），上传宿主机信任库
+        # 并通过 SSL_CERT_FILE 让 Go 的 TLS 校验使用它。
+        ca_bundle = host_ca_bundle()
+        if ca_bundle is not None:
+            await environment.upload_file(ca_bundle, REMOTE_CA_BUNDLE)
+            self._ca_bundle_uploaded = True
         await self._chmod(environment)
         check = await environment.exec(command=f"{shlex.quote(REMOTE_BINARY)} -version")
         if check.return_code != 0:
@@ -162,6 +206,10 @@ class EulerAgent(BaseAgent):
                 str(self.max_tool_calls),
                 "-max-duration",
                 f"{self.max_duration_sec}s",
+                "-model-timeout",
+                self.model_timeout,
+                "-model-request-timeout",
+                self.model_request_timeout,
             ]
         )
         try:
@@ -227,6 +275,8 @@ class EulerAgent(BaseAgent):
             "EULER_MODEL_BASE_URL": self.model_base_url,
             "EULER_MODEL_API_KEY": self.api_key,
             "EULER_REASONING_EFFORT": self.reasoning_effort,
+            # 仅在 setup 上传成功时覆盖，容器自带信任库时保持默认探测。
+            "SSL_CERT_FILE": REMOTE_CA_BUNDLE if self._ca_bundle_uploaded else "",
         }
         values.update(
             {key: os.environ.get(key, "") for key in LANGFUSE_ENV_KEYS}

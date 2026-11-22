@@ -108,6 +108,7 @@ func buildServices(cfg config.Config, db *gorm.DB) services {
 		Limits: cfg.Agent, ShellTimeout: cfg.ShellTimeout,
 		ShellOutputBytes: cfg.ShellOutputBytes, PreviewBytes: cfg.PreviewBytes,
 		ShellPathPrefix: cfg.ShellPathPrefix, ModelTimeout: cfg.ModelTimeout,
+		ModelRequestTimeout:  cfg.ModelRequestTimeout,
 		ModelReasoningEffort: cfg.ModelReasoningEffort,
 	})
 	return services{

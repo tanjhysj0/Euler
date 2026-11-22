@@ -6,6 +6,7 @@ import pytest
 
 from agents.euler_agent import (
     REMOTE_BINARY,
+    REMOTE_CA_BUNDLE,
     REMOTE_INSTRUCTION,
     REMOTE_RESULT,
     EulerAgent,
@@ -79,14 +80,18 @@ def make_context():
     return SimpleNamespace(metadata=None)
 
 
-def test_setup_uploads_binary_for_container_arch(tmp_path):
+def test_setup_uploads_binary_for_container_arch(tmp_path, monkeypatch):
+    ca_bundle = tmp_path / "ca.pem"
+    ca_bundle.write_text("ca")
+    monkeypatch.setenv("EULER_TLS_CA_FILE", str(ca_bundle))
     agent = make_agent(tmp_path)
     environment = FakeEnvironment(arch="aarch64")
 
     asyncio.run(agent.setup(environment))
 
     assert environment.uploads == [
-        (str(agent.dist_dir / "euler-agent-linux-arm64"), REMOTE_BINARY)
+        (str(agent.dist_dir / "euler-agent-linux-arm64"), REMOTE_BINARY),
+        (str(ca_bundle), REMOTE_CA_BUNDLE),
     ]
     assert f"chmod +x {REMOTE_BINARY}" in environment.commands
     assert any(command.endswith("-version") for command in environment.commands)
@@ -134,6 +139,46 @@ def test_run_executes_agent_in_container_workspace(tmp_path):
     text = (tmp_path / "logs" / "instruction.txt").read_text(encoding="utf-8")
     assert "/app" in text
     assert text.endswith("fix the bug")
+
+
+def test_run_passes_model_timeout_and_ca_bundle_env(tmp_path, monkeypatch):
+    ca_bundle = tmp_path / "ca.pem"
+    ca_bundle.write_text("ca")
+    monkeypatch.setenv("EULER_TLS_CA_FILE", str(ca_bundle))
+    monkeypatch.setenv("EULER_MODEL_TIMEOUT", "180s")
+    monkeypatch.setenv("EULER_MODEL_REQUEST_TIMEOUT", "90s")
+    agent = make_agent(tmp_path)
+    environment = FakeEnvironment()
+    environment.report = {"status": "succeeded", "tool_calls": [{}]}
+
+    asyncio.run(agent.setup(environment))
+    asyncio.run(agent.run("fix", environment, make_context()))
+
+    run_command = next(
+        command for command in environment.commands
+        if command.startswith(REMOTE_BINARY) and "-dir" in command
+    )
+    assert "-model-timeout 180s" in run_command
+    assert "-model-request-timeout 90s" in run_command
+    assert environment.exec_env["SSL_CERT_FILE"] == REMOTE_CA_BUNDLE
+
+
+def test_run_uses_default_model_timeout(tmp_path, monkeypatch):
+    monkeypatch.delenv("EULER_MODEL_TIMEOUT", raising=False)
+    monkeypatch.delenv("EULER_MODEL_REQUEST_TIMEOUT", raising=False)
+    agent = make_agent(tmp_path)
+    environment = FakeEnvironment()
+    environment.report = {"status": "succeeded", "tool_calls": [{}]}
+
+    asyncio.run(agent.run("fix", environment, make_context()))
+
+    run_command = next(
+        command for command in environment.commands
+        if command.startswith(REMOTE_BINARY) and "-dir" in command
+    )
+    assert "-model-timeout 10s" in run_command
+    assert "-model-request-timeout 5m" in run_command
+    assert "SSL_CERT_FILE" not in environment.exec_env
 
 
 def test_run_passes_model_key_and_langfuse_env(tmp_path, monkeypatch):

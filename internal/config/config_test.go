@@ -21,8 +21,11 @@ func TestLoadDefaults(t *testing.T) {
 		cfg.Agent.MaxToolCalls != 0 || cfg.Agent.MaxDuration != 10*time.Minute {
 		t.Fatalf("cfg=%+v", cfg)
 	}
-	if cfg.ModelTimeout != 2*time.Minute {
+	if cfg.ModelTimeout != 10*time.Second {
 		t.Fatalf("model_timeout=%v", cfg.ModelTimeout)
+	}
+	if cfg.ModelRequestTimeout != 5*time.Minute {
+		t.Fatalf("model_request_timeout=%v", cfg.ModelRequestTimeout)
 	}
 	if !strings.HasSuffix(cfg.WorkspaceRoot, "EulerWorkspaces") {
 		t.Fatal(cfg.WorkspaceRoot)

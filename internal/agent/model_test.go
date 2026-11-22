@@ -3,8 +3,14 @@ package agent
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -96,6 +102,58 @@ func TestStreamTimeoutMapsToModelTimeoutCode(t *testing.T) {
 	var coded interface{ ErrorCode() string }
 	require.ErrorAs(t, err, &coded)
 	require.Equal(t, codeModelTimeout, coded.ErrorCode())
+}
+
+func TestMapModelErrorMapsReadTimeoutToModelTimeout(t *testing.T) {
+	readErr := &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}
+	err := mapModelError(readErr, "key")
+	var coded interface{ ErrorCode() string }
+	require.ErrorAs(t, err, &coded)
+	require.Equal(t, codeModelTimeout, coded.ErrorCode())
+}
+
+func TestIdleTimeoutClientFailsWhenServerStalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := newModelHTTPClient(50*time.Millisecond, 5*time.Second)
+	require.Equal(t, 5*time.Second, client.Timeout)
+	response, err := client.Get(server.URL)
+	if response != nil {
+		require.NoError(t, response.Body.Close())
+	}
+	require.Error(t, err)
+	var netErr net.Error
+	require.ErrorAs(t, err, &netErr)
+	require.True(t, netErr.Timeout())
+}
+
+func TestIdleTimeoutClientAllowsLongStreamWithData(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			return
+		}
+		for range 8 {
+			if _, err := w.Write([]byte("x")); err != nil {
+				return
+			}
+			flusher.Flush()
+			time.Sleep(30 * time.Millisecond)
+		}
+	}))
+	defer server.Close()
+
+	client := newModelHTTPClient(100*time.Millisecond, 5*time.Second)
+	response, err := client.Get(server.URL)
+	require.NoError(t, err)
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, response.Body.Close())
+	require.NoError(t, err)
+	require.Len(t, body, 8)
 }
 
 func TestRetryModelRetriesRateLimitThenSucceeds(t *testing.T) {

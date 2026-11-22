@@ -36,15 +36,17 @@ const (
 	exitFailure = 1
 	minLimit    = 1
 	// noRoundLimit 是轮次上限的“不设限”取值，此时只受运行时长约束。
-	noRoundLimit        = 0
-	noToolCallLimit     = 0
-	dirPerm             = 0o755
-	filePerm            = 0o600
-	logKeyError         = "error"
-	defaultMaxRounds    = noRoundLimit
-	defaultMaxToolCalls = noToolCallLimit
-	defaultMaxDuration  = 10 * time.Minute
-	emptyInput          = ""
+	noRoundLimit    = 0
+	noToolCallLimit = 0
+	// noModelRequestTimeout 表示未指定总时长上限，使用默认值。
+	noModelRequestTimeout time.Duration = 0
+	dirPerm                             = 0o755
+	filePerm                            = 0o600
+	logKeyError                         = "error"
+	defaultMaxRounds                    = noRoundLimit
+	defaultMaxToolCalls                 = noToolCallLimit
+	defaultMaxDuration                  = 10 * time.Minute
+	emptyInput                          = ""
 
 	statusSucceeded = "succeeded"
 	statusFailed    = "failed"
@@ -61,22 +63,23 @@ const (
 
 // options 汇总一次无服务端运行的全部参数。
 type options struct {
-	instruction     string
-	instructionFile string
-	dir             string
-	resultPath      string
-	prompt          string
-	model           string
-	baseURL         string
-	apiKey          string
-	reasoningEffort string
-	maxRounds       int
-	maxToolCalls    int
-	maxToolOutput   int
-	maxDuration     time.Duration
-	shellTimeout    time.Duration
-	modelTimeout    time.Duration
-	previewBytes    int
+	instruction         string
+	instructionFile     string
+	dir                 string
+	resultPath          string
+	prompt              string
+	model               string
+	baseURL             string
+	apiKey              string
+	reasoningEffort     string
+	maxRounds           int
+	maxToolCalls        int
+	maxToolOutput       int
+	maxDuration         time.Duration
+	shellTimeout        time.Duration
+	modelTimeout        time.Duration
+	modelRequestTimeout time.Duration
+	previewBytes        int
 }
 
 // report 是写回调用方的运行结果，字段保持稳定以便评测侧解析。
@@ -130,7 +133,9 @@ func bindFlags() *options {
 	opts := options{dir: ".", maxRounds: defaultMaxRounds,
 		maxToolCalls: defaultMaxToolCalls, maxToolOutput: defaults.ShellOutputBytes,
 		maxDuration: defaultMaxDuration, shellTimeout: defaults.ShellTimeout,
-		modelTimeout: defaults.ModelTimeout, previewBytes: defaults.PreviewBytes}
+		modelTimeout:        defaults.ModelTimeout,
+		modelRequestTimeout: defaults.ModelRequestTimeout,
+		previewBytes:        defaults.PreviewBytes}
 	flag.StringVar(&opts.instruction, "instruction", emptyInput, "任务指令文本")
 	flag.StringVar(&opts.instructionFile, "instruction-file", emptyInput, "任务指令文件路径")
 	flag.StringVar(&opts.dir, "dir", opts.dir, "工作区目录")
@@ -149,7 +154,9 @@ func bindFlags() *options {
 	flag.DurationVar(&opts.shellTimeout, "shell-timeout", opts.shellTimeout,
 		"单条 shell 命令超时")
 	flag.DurationVar(&opts.modelTimeout, "model-timeout", opts.modelTimeout,
-		"单次模型请求超时")
+		"单次模型请求的空闲超时")
+	flag.DurationVar(&opts.modelRequestTimeout, "model-request-timeout",
+		opts.modelRequestTimeout, "单次模型请求的总时长上限")
 	flag.IntVar(&opts.previewBytes, "preview-bytes", opts.previewBytes, "文件预览字节上限")
 	// 密钥只从环境变量读取，避免出现在进程命令行里被其他进程看到。
 	opts.apiKey = env("EULER_MODEL_API_KEY")
@@ -176,6 +183,8 @@ func validate(opts options) error {
 		return errors.New("max tool calls must be non-negative")
 	case opts.maxDuration < minLimit:
 		return errors.New("duration limit must be positive")
+	case opts.modelRequestTimeout < noModelRequestTimeout:
+		return errors.New("model request timeout must be non-negative")
 	}
 	return nil
 }
@@ -209,6 +218,7 @@ func execute(opts options) report {
 			MaxOutputBytes: opts.maxToolOutput},
 		ShellTimeout: opts.shellTimeout, ShellOutputBytes: opts.maxToolOutput,
 		PreviewBytes: opts.previewBytes, ModelTimeout: opts.modelTimeout,
+		ModelRequestTimeout:  opts.modelRequestTimeout,
 		ModelReasoningEffort: opts.reasoningEffort,
 	})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

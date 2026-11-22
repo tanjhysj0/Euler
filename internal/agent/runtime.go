@@ -89,6 +89,7 @@ type Deps struct {
 	ShellOutputBytes     int
 	ShellPathPrefix      string
 	ModelTimeout         time.Duration
+	ModelRequestTimeout  time.Duration
 	ModelReasoningEffort string
 	PreviewBytes         int
 }
@@ -104,6 +105,7 @@ func NewRuntime(deps Deps) *Runtime {
 	if deps.Factory == nil {
 		deps.Factory = OpenAIChatModelFactory{
 			Timeout:         deps.ModelTimeout,
+			RequestTimeout:  deps.ModelRequestTimeout,
 			ReasoningEffort: deps.ModelReasoningEffort,
 		}
 	}
