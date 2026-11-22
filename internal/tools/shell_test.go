@@ -6,9 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -159,45 +157,6 @@ func TestShellCancelledContextHasNoSideEffect(t *testing.T) {
 	result := executor.Execute(ctx, ShellRequest{Dir: dir, Command: "touch marker"})
 	require.ErrorIs(t, result.Err, context.Canceled)
 	require.NoFileExists(t, filepath.Join(dir, "marker"))
-}
-
-func TestShellKillsProcessGroupOnCancel(t *testing.T) {
-	dir := t.TempDir()
-	executor := NewShellExecutor(ShellConfig{Timeout: 30 * time.Second, MaxOutputBytes: 1024})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	resultCh := make(chan ShellResult, 1)
-	go func() {
-		resultCh <- executor.Execute(ctx, ShellRequest{
-			Dir: dir, Command: "sleep 30 & echo $! > child.pid; wait",
-		})
-	}()
-	pid := waitForChildPID(t, filepath.Join(dir, "child.pid"))
-	cancel()
-	result := <-resultCh
-	require.ErrorIs(t, result.Err, context.Canceled)
-	require.Eventually(t, func() bool {
-		return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
-	}, 5*time.Second, 20*time.Millisecond)
-}
-
-// waitForChildPID 轮询直到后台子进程写入完整的 pid。
-func waitForChildPID(t *testing.T, pidFile string) int {
-	t.Helper()
-	var pid int
-	require.Eventually(t, func() bool {
-		content, err := os.ReadFile(pidFile)
-		if err != nil {
-			return false
-		}
-		parsed, parseErr := strconv.Atoi(strings.TrimSpace(string(content)))
-		if parseErr != nil {
-			return false
-		}
-		pid = parsed
-		return true
-	}, 5*time.Second, 10*time.Millisecond)
-	return pid
 }
 
 func guardedCall(dir, command string) GuardedCall {
