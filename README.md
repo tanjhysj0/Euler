@@ -208,19 +208,18 @@ make test-e2e  # Playwright 端到端测试
 ```bash
 make agent-dist          # 交叉编译 linux/amd64 与 linux/arm64 的 agent 二进制
 
-make harbor-test         # 默认快速回归清单
+make harbor-test         # 默认：依次跑三组共 30 个任务
+make harbor-test-fast    # 快速回归：只跑 selected-tasks.txt 的 10 个任务
 make harbor-test-easy    # 简单组（10 个任务）
 make harbor-test-medium  # 中等组（10 个任务）
 make harbor-test-hard    # 困难组（10 个任务）
-make harbor-test-all     # 依次运行三组
+make harbor-test-all     # 同 harbor-test，兼容旧用法
 ```
 
 任务清单位于：
 
-- `harbor_eval/tasks/selected-tasks.txt`：默认快速回归集
-- `harbor_eval/tasks/selected-easy.txt`
-- `harbor_eval/tasks/selected-medium.txt`
-- `harbor_eval/tasks/selected-hard.txt`
+- `harbor_eval/tasks/selected-easy.txt`、`selected-medium.txt`、`selected-hard.txt`：`harbor-test` 默认的三组，共 30 个
+- `harbor_eval/tasks/selected-tasks.txt`：`harbor-test-fast` 使用的快速回归集
 
 评测预算：
 

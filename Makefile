@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt tidy web-install web-test web-build test-e2e test-smoke dev-api dev-restart dev-restart-all dev-reload dev-db-up dev-db-stop dev-db-restart dev-web-restart dev-web-stop dev-stop dev-web start stop restart harbor-test harbor-test-easy harbor-test-medium harbor-test-hard harbor-test-all harbor-check-selected harbor-download harbor-clean agent-dist
+.PHONY: build test lint fmt tidy web-install web-test web-build test-e2e test-smoke dev-api dev-restart dev-restart-all dev-reload dev-db-up dev-db-stop dev-db-restart dev-web-restart dev-web-stop dev-stop dev-web start stop restart harbor-test harbor-test-run harbor-test-easy harbor-test-medium harbor-test-hard harbor-test-all harbor-test-fast harbor-check-selected harbor-download harbor-clean agent-dist
 
 # 本地调试服务的端口与配置文件；EULER_CONFIG 留空时使用默认的 ~/.euler/config.yaml。
 EULER_PORT ?= 8080
@@ -197,10 +197,10 @@ harbor-clean:
 		docker network rm "$$net" >/dev/null 2>&1 || true; \
 	done
 
-# 构建容器内 agent 二进制并运行 Harbor 评测；agent 在任务容器内直接执行，
-# 不需要宿主机 Euler 服务或工作区挂载。
+# 内部 target：构建容器内 agent 二进制并运行单批 Harbor 评测；agent 在任务容器内
+# 直接执行，不需要宿主机 Euler 服务或工作区挂载。
 # 运行前先兜底清理历史残留，结束后（无论成功失败）再清理一次，保证可重复执行。
-harbor-test: harbor-clean
+harbor-test-run: harbor-clean
 	@set -e; \
 		trap '$(MAKE) --no-print-directory harbor-clean >/dev/null 2>&1 || true' EXIT; \
 		if [ -z "$${LANGFUSE_SECRET_KEY:-}" ] && [ -f "$$HOME/.zprofile" ]; then \
@@ -277,13 +277,13 @@ harbor-test: harbor-clean
 
 # 按难度分组运行定死的精选任务；HARBOR_TASKS 置空，避免外部同名变量改变任务集合。
 harbor-test-easy:
-	@$(MAKE) --no-print-directory harbor-test HARBOR_TASKS= HARBOR_TASKS_FILE=$(HARBOR_FIXED_EASY)
+	@$(MAKE) --no-print-directory harbor-test-run HARBOR_TASKS= HARBOR_TASKS_FILE=$(HARBOR_FIXED_EASY)
 
 harbor-test-medium:
-	@$(MAKE) --no-print-directory harbor-test HARBOR_TASKS= HARBOR_TASKS_FILE=$(HARBOR_FIXED_MEDIUM)
+	@$(MAKE) --no-print-directory harbor-test-run HARBOR_TASKS= HARBOR_TASKS_FILE=$(HARBOR_FIXED_MEDIUM)
 
 harbor-test-hard:
-	@$(MAKE) --no-print-directory harbor-test HARBOR_TASKS= HARBOR_TASKS_FILE=$(HARBOR_FIXED_HARD)
+	@$(MAKE) --no-print-directory harbor-test-run HARBOR_TASKS= HARBOR_TASKS_FILE=$(HARBOR_FIXED_HARD)
 
 # 校验定死的 30 个任务（每组 10 个），清单被误改时直接失败。
 harbor-check-selected:
@@ -317,9 +317,16 @@ harbor-download:
 		done; \
 	done
 
-# 定死跑三组共 30 个任务：先校验清单并补齐缺失任务，再按组依次执行；
+# 默认评测：定死跑三组共 30 个任务；先校验清单并补齐缺失任务，再按组依次执行，
 # 任意一组失败都会中止。
-harbor-test-all: harbor-check-selected harbor-download
+harbor-test: harbor-check-selected harbor-download
 	@$(MAKE) --no-print-directory harbor-test-easy
 	@$(MAKE) --no-print-directory harbor-test-medium
 	@$(MAKE) --no-print-directory harbor-test-hard
+
+# 兼容旧用法：三组共 30 个任务。
+harbor-test-all: harbor-test
+
+# 快速回归：只跑 selected-tasks.txt 里的 10 个任务。
+harbor-test-fast:
+	@$(MAKE) --no-print-directory harbor-test-run HARBOR_TASKS= HARBOR_TASKS_FILE=harbor_eval/tasks/selected-tasks.txt
