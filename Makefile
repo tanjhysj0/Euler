@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt tidy web-install web-test web-build test-e2e test-smoke dev-api dev-restart dev-restart-all dev-reload dev-web-restart dev-stop dev-web harbor-test harbor-test-easy harbor-test-medium harbor-test-hard harbor-test-all agent-dist
+.PHONY: build test lint fmt tidy web-install web-test web-build test-e2e test-smoke dev-api dev-restart dev-restart-all dev-reload dev-db-up dev-db-stop dev-db-restart dev-web-restart dev-web-stop dev-stop dev-web start stop restart harbor-test harbor-test-easy harbor-test-medium harbor-test-hard harbor-test-all harbor-check-selected harbor-download harbor-clean agent-dist
 
 # 本地调试服务的端口与配置文件；EULER_CONFIG 留空时使用默认的 ~/.euler/config.yaml。
 EULER_PORT ?= 8080
@@ -33,10 +33,12 @@ HARBOR_TASKS ?=
 # 精选任务清单（每行一个仓库相对路径）；HARBOR_TASKS 为空时使用。
 HARBOR_TASKS_FILE ?= harbor_eval/tasks/selected-tasks.txt
 HARBOR_SELECTED ?= $(shell grep -v '^\#' $(HARBOR_TASKS_FILE) 2>/dev/null | sed '/^$$/d')
-# 按难度分组的精选清单，各 10 个任务；程序执行时间上限分别为 30s / 30s / 60s。
-HARBOR_EASY_TASKS_FILE ?= harbor_eval/tasks/selected-easy.txt
-HARBOR_MEDIUM_TASKS_FILE ?= harbor_eval/tasks/selected-medium.txt
-HARBOR_HARD_TASKS_FILE ?= harbor_eval/tasks/selected-hard.txt
+# harbor-test-all 定死的三组精选清单，各 10 个任务（共 30 个）；
+# 不读取 HARBOR_DATASETS / HARBOR_TASKS / selected-tasks.txt，避免任务集合漂移。
+HARBOR_FIXED_EASY := harbor_eval/tasks/selected-easy.txt
+HARBOR_FIXED_MEDIUM := harbor_eval/tasks/selected-medium.txt
+HARBOR_FIXED_HARD := harbor_eval/tasks/selected-hard.txt
+HARBOR_FIXED_FILES := $(HARBOR_FIXED_EASY) $(HARBOR_FIXED_MEDIUM) $(HARBOR_FIXED_HARD)
 # 容器内 agent 二进制的输出目录。
 AGENT_DIST ?= bin/agent-dist
 
@@ -122,8 +124,13 @@ dev-restart:
 # 前端有改动时使用：重新构建嵌入产物后再重启后端，避免 UI 仍是旧 dist。
 dev-reload: web-build dev-restart
 
-# 前后端一起重启：后端（8080）与 Vite 开发服务器（5173）。
-dev-restart-all: dev-restart dev-web-restart
+# 启动本地开发数据库（compose 中的 postgres）；重复执行是幂等的，
+# --wait 会等到 healthcheck 通过，避免后端先于数据库就绪。
+dev-db-up:
+	@docker compose up -d --wait postgres
+
+# 数据库、后端（8080）与 Vite 开发服务器（5173）一起启动/重启。
+dev-restart-all: dev-db-up dev-restart dev-web-restart
 
 # 重启前端开发服务器（5173）：停掉旧进程后以固定端口重新启动。
 dev-web-restart:
@@ -152,10 +159,50 @@ dev-stop:
 dev-web:
 	npm --prefix web run dev
 
+# 停止前端开发服务器（5173）。
+dev-web-stop:
+	@pid=$$(lsof -nP -iTCP:$(WEB_PORT) -sTCP:LISTEN -t 2>/dev/null | head -1); \
+	if [ -n "$$pid" ]; then kill "$$pid" && echo "已停止前端 (pid $$pid)"; \
+	else echo "端口 $(WEB_PORT) 上没有运行中的前端"; fi
+
+# 停止数据库；容器尚未创建时也视为成功，保证 make stop 能完整执行。
+dev-db-stop:
+	@docker compose stop postgres >/dev/null 2>&1 || true
+	@echo "数据库已停止"
+
+# 重启数据库，并等待 healthcheck 通过后再返回。
+dev-db-restart:
+	@docker compose restart postgres
+	@docker compose up -d --wait postgres
+
+# 一键启动：数据库 + 后端（8080）+ 前端（5173）；已在运行的服务会先停止再启动。
+start: dev-db-up dev-restart dev-web-restart
+
+# 一键停止：前端、后端、数据库。
+stop: dev-web-stop dev-stop dev-db-stop
+
+# 一键重建并启动：重新构建前后端，再重启数据库与两个服务。
+restart: build dev-db-restart dev-restart dev-web-restart
+
+# 清理 Harbor 评测残留：先删掉挂在评测网络上的容器，再删除评测网络。
+# Harbor 正常结束会自行 teardown，但启动或结果下载阶段抛异常会跳过清理；
+# 残留网络会持续占用 Docker 地址池，最终导致
+# “all predefined address pools have been fully subnetted”。
+harbor-clean:
+	@for net in $$(docker network ls --format '{{.Name}}' | grep '__env_'); do \
+		for cid in $$(docker network inspect "$$net" \
+			-f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do \
+			docker rm -f "$$cid" >/dev/null 2>&1 || true; \
+		done; \
+		docker network rm "$$net" >/dev/null 2>&1 || true; \
+	done
+
 # 构建容器内 agent 二进制并运行 Harbor 评测；agent 在任务容器内直接执行，
 # 不需要宿主机 Euler 服务或工作区挂载。
-harbor-test:
+# 运行前先兜底清理历史残留，结束后（无论成功失败）再清理一次，保证可重复执行。
+harbor-test: harbor-clean
 	@set -e; \
+		trap '$(MAKE) --no-print-directory harbor-clean >/dev/null 2>&1 || true' EXIT; \
 		if [ -z "$${LANGFUSE_SECRET_KEY:-}" ] && [ -f "$$HOME/.zprofile" ]; then \
 			set -a; . "$$HOME/.zprofile" >/dev/null 2>&1 || true; set +a; \
 		fi; \
@@ -228,15 +275,51 @@ harbor-test:
 				awk '{total++; if ($$1 == "1") passed++} END {printf "==> 通过 %d/%d\n", passed, total}'; \
 		fi
 
-# 按难度分组运行精选任务，复用 harbor-test 的构建与结果汇总逻辑。
+# 按难度分组运行定死的精选任务；HARBOR_TASKS 置空，避免外部同名变量改变任务集合。
 harbor-test-easy:
-	@$(MAKE) --no-print-directory harbor-test HARBOR_TASKS_FILE=$(HARBOR_EASY_TASKS_FILE)
+	@$(MAKE) --no-print-directory harbor-test HARBOR_TASKS= HARBOR_TASKS_FILE=$(HARBOR_FIXED_EASY)
 
 harbor-test-medium:
-	@$(MAKE) --no-print-directory harbor-test HARBOR_TASKS_FILE=$(HARBOR_MEDIUM_TASKS_FILE)
+	@$(MAKE) --no-print-directory harbor-test HARBOR_TASKS= HARBOR_TASKS_FILE=$(HARBOR_FIXED_MEDIUM)
 
 harbor-test-hard:
-	@$(MAKE) --no-print-directory harbor-test HARBOR_TASKS_FILE=$(HARBOR_HARD_TASKS_FILE)
+	@$(MAKE) --no-print-directory harbor-test HARBOR_TASKS= HARBOR_TASKS_FILE=$(HARBOR_FIXED_HARD)
 
-# 依次跑完三组；任意一组失败都会中止。
-harbor-test-all: harbor-test-easy harbor-test-medium harbor-test-hard
+# 校验定死的 30 个任务（每组 10 个），清单被误改时直接失败。
+harbor-check-selected:
+	@set -e; \
+	total=0; \
+	for file in $(HARBOR_FIXED_FILES); do \
+		n=$$(grep -hv '^\#' "$$file" | sed '/^$$/d' | wc -l | tr -d ' '); \
+		if [ "$$n" -ne 10 ]; then \
+			echo "任务清单 $$file 应为 10 个任务，实际 $$n 个" >&2; \
+			exit 1; \
+		fi; \
+		total=$$((total + n)); \
+	done; \
+	echo "==> 任务清单校验通过：$$total 个任务"
+
+# 按定死清单补齐缺失的任务目录，任务名取 _downloads 后的 <dataset>/<task>。
+harbor-download:
+	@set -e; \
+	for file in $(HARBOR_FIXED_FILES); do \
+		for path in $$(grep -hv '^\#' "$$file" | sed '/^$$/d'); do \
+			if [ -f "$$path/task.toml" ]; then continue; fi; \
+			command -v harbor >/dev/null 2>&1 || { \
+				echo "缺少 harbor 命令，无法自动下载任务 $$path" >&2; exit 1; \
+			}; \
+			pick=$${path#harbor_eval/tasks/_downloads/}; \
+			echo "==> 下载缺失任务：$$pick"; \
+			harbor download "$$pick" -o harbor_eval/tasks/_downloads; \
+			if [ ! -f "$$path/task.toml" ]; then \
+				echo "下载后仍缺少任务目录：$$path" >&2; exit 1; \
+			fi; \
+		done; \
+	done
+
+# 定死跑三组共 30 个任务：先校验清单并补齐缺失任务，再按组依次执行；
+# 任意一组失败都会中止。
+harbor-test-all: harbor-check-selected harbor-download
+	@$(MAKE) --no-print-directory harbor-test-easy
+	@$(MAKE) --no-print-directory harbor-test-medium
+	@$(MAKE) --no-print-directory harbor-test-hard
