@@ -258,10 +258,8 @@ beforeEach(() => {
     deltas: {},
     reasoning: {},
     timelineEvents: {},
-    lastSeq: {},
     seenEventKeys: new Set<string>(),
     connection: null,
-    activeBySession: {},
     drafts: {},
   })
   vi.stubGlobal('EventSource', FakeEventSource)

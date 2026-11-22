@@ -24,7 +24,6 @@ export function useRunEvents(snapshot: RunSnapshot | undefined) {
     if (!active || runId === undefined || sessionId === undefined) {
       return
     }
-    useRunStore.getState().setActive(sessionId, runId)
     useRunStore.getState().setConnection('connecting')
     const source = new EventSource(`/api/v1/runs/${runId}/events?after=0`)
     let closed = false
@@ -76,7 +75,6 @@ export function useRunEvents(snapshot: RunSnapshot | undefined) {
         closed = true
         source.close()
         useRunStore.getState().setConnection(null)
-        useRunStore.getState().setActive(sessionId, null)
         void (async () => {
           await queryClient.invalidateQueries({ queryKey: ['messages', sessionId] })
           await queryClient.invalidateQueries({ queryKey: ['runs', runId] })

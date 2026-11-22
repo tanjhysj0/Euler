@@ -85,7 +85,9 @@ export function toTimelineEvent(envelope: RunEvent): TimelineEvent | null {
       delta: stringField(envelope.payload, 'delta'),
     }
   }
-  if (envelope.type.startsWith('tool.')) {
+  // 时间线只需要工具调用开始事件；完成/失败通过快照刷新更新状态，
+  // 不必逐条保存在前端内存里。
+  if (envelope.type === 'tool.started') {
     const toolCallId = stringField(envelope.payload, 'tool_call_id')
     if (!toolCallId) {
       return null

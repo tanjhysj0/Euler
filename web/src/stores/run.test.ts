@@ -21,15 +21,7 @@ describe('createRunStore', () => {
     store.getState().applyEvent(envelope)
     store.getState().applyEvent(envelope)
     expect(store.getState().deltas.m1).toBe('你好')
-    expect(store.getState().lastSeq.r1).toBe(7)
-  })
-
-  it('Run 活跃时保留草稿但不创建第二个 Run', () => {
-    const store = createRunStore()
-    store.getState().setDraft('s1', '下一条消息')
-    store.getState().setActive('s1', 'r1')
-    expect(store.getState().drafts.s1).toBe('下一条消息')
-    expect(store.getState().activeBySession.s1).toBe('r1')
+    expect(store.getState().timelineEvents.r1).toHaveLength(1)
   })
 
   it('不同 Run 的相同 seq 互不影响，增量按到达顺序拼接', () => {
@@ -39,8 +31,6 @@ describe('createRunStore', () => {
     store.getState().applyEvent(event({ run_id: 'r1', seq: 2, type: 'message.delta', payload: { message_id: 'm1', delta: '好' } }))
     expect(store.getState().deltas.m1).toBe('你好')
     expect(store.getState().deltas.m2).toBe('好')
-    expect(store.getState().lastSeq.r1).toBe(2)
-    expect(store.getState().lastSeq.r2).toBe(1)
   })
 
   it('思考事件按消息 ID 累积，与正文增量互不影响', () => {
@@ -61,23 +51,14 @@ describe('createRunStore', () => {
   it('resetRun 清空增量与连接状态，但保留草稿', () => {
     const store = createRunStore()
     store.getState().setDraft('s1', '保留草稿')
-    store.getState().setActive('s1', 'r1')
     store.getState().setConnection('connected')
     store.getState().applyEvent(event({ run_id: 'r1', seq: 3, type: 'message.delta', payload: { message_id: 'm1', delta: '文本' } }))
     store.getState().resetRun('r1')
     expect(store.getState().deltas).toEqual({})
-    expect(store.getState().lastSeq.r1).toBeUndefined()
     expect(store.getState().connection).toBeNull()
     expect(store.getState().drafts.s1).toBe('保留草稿')
     // 重置后同一事件可再次应用（重连补洞场景）。
     store.getState().applyEvent(event({ run_id: 'r1', seq: 3, type: 'message.delta', payload: { message_id: 'm1', delta: '文本' } }))
     expect(store.getState().deltas.m1).toBe('文本')
-  })
-
-  it('setActive 传 null 清除会话的活跃 Run', () => {
-    const store = createRunStore()
-    store.getState().setActive('s1', 'r1')
-    store.getState().setActive('s1', null)
-    expect(store.getState().activeBySession.s1).toBeUndefined()
   })
 })

@@ -28,6 +28,9 @@ describe('runTimeline', () => {
       toolCallId: 'tc1',
     })
     expect(toTimelineEvent(event(3, 'message.started', { id: 'm1' }))).toBeNull()
+    // 工具状态由快照刷新更新，完成/失败事件不再进入时间线内存。
+    expect(toTimelineEvent(event(4, 'tool.completed', { tool_call_id: 'tc1' }))).toBeNull()
+    expect(toTimelineEvent(event(5, 'tool.failed', { tool_call_id: 'tc1' }))).toBeNull()
   })
 
   it('把连续工具调用合并为一组，文本与思考作为分组边界', () => {

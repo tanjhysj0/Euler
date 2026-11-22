@@ -120,7 +120,6 @@ export default function ChatPanel({ session }: ChatPanelProps) {
       const result = await startRun.mutateAsync(content)
       setDraft(session.id, '')
       setShowWorkspaceWarning(result.workspace_warning)
-      useRunStore.getState().setActive(session.id, result.run.id)
       setRunId(result.run.id)
     } catch (err) {
       if (err instanceof APIError && err.code === 'active_run_exists') {
