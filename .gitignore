@@ -6,6 +6,7 @@
 
 # 本地截图与临时产物
 /.screenshots/
+/web/.screenshots/
 
 # 本地 git worktree（隔离工作区）
 /.worktrees/
@@ -22,6 +23,9 @@
 
 # 日志
 *.log
+
+# 原始录屏（已转换为 docs/assets/demo.mp4 与 demo.gif）
+/*.mov
 
 # Harbor 评测产物
 /harbor_eval/tasks/_downloads/
