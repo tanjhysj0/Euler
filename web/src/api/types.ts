@@ -19,6 +19,33 @@ export interface CreateModelProfileInput {
   api_key?: string
 }
 
+export interface UpdateModelProfileInput {
+  name: string
+  base_url: string
+  model: string
+  secret_ref?: string
+  // 留空表示保留原有密钥。
+  api_key?: string
+}
+
+// ListModelsInput 使用已填写的 Base URL 与凭据远程拉取模型列表；
+// profile_id 用于编辑时复用后端已保存的密钥。
+export interface ListModelsInput {
+  base_url: string
+  api_key?: string
+  secret_kind?: 'keychain' | 'environment'
+  secret_ref?: string
+  profile_id?: string
+}
+
+export interface ModelListResult {
+  models: string[]
+}
+
+export interface DeleteModelProfileResult {
+  rebound_sessions: number
+}
+
 export interface WorkspaceView {
   id: string
   path: string
@@ -43,7 +70,8 @@ export interface SessionView {
 }
 
 export interface CreateSessionInput {
-  profile_id: string
+  // 不传时后端使用默认模型（最早创建的模型配置）。
+  profile_id?: string
   path: string
 }
 

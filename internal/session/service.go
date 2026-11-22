@@ -32,6 +32,10 @@ var (
 	ErrInvalidInput = errors.New("invalid session input")
 	// ErrNotFound 表示会话不存在。
 	ErrNotFound = errors.New("session not found")
+	// ErrNoModelProfile 表示系统中没有任何模型配置，无法确定默认模型。
+	ErrNoModelProfile = errors.New("no model profile available")
+	// ErrSessionHasActiveRun 表示会话仍有进行中的 Run，不能删除。
+	ErrSessionHasActiveRun = errors.New("session has active run")
 
 	activeRunStatuses = []string{"queued", "running", "waiting_approval"}
 )
@@ -170,7 +174,11 @@ func (s *Service) insert(
 ) (CreateResult, error) {
 	var result CreateResult
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		profile, err := loadProfile(tx, profileID)
+		resolvedID, err := resolveProfileID(tx, profileID)
+		if err != nil {
+			return err
+		}
+		profile, err := loadProfile(tx, resolvedID)
 		if err != nil {
 			return err
 		}
@@ -185,7 +193,7 @@ func (s *Service) insert(
 		session := persistence.Session{
 			ID:             sessionID,
 			WorkspaceID:    workspaceRow.ID,
-			ModelProfileID: profileID,
+			ModelProfileID: resolvedID,
 			Title:          defaultTitle(path),
 			Status:         statusActive,
 			CreatedAt:      now,
@@ -249,16 +257,7 @@ func (s *Service) filterPath(path string) (string, error) {
 }
 
 func (s *Service) ensureSession(ctx context.Context, id uuid.UUID) error {
-	var count int64
-	err := s.db.WithContext(ctx).Model(&persistence.Session{}).
-		Where(idFilter, id).Count(&count).Error
-	if err != nil {
-		return fmt.Errorf("load session: %w", err)
-	}
-	if count == emptyLength {
-		return ErrNotFound
-	}
-	return nil
+	return requireSession(s.db.WithContext(ctx), id)
 }
 
 const sessionColumns = `sessions.id, sessions.title, sessions.status,

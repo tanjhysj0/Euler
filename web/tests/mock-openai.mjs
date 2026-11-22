@@ -219,6 +219,16 @@ const server = http.createServer((req, res) => {
     res.end('ok')
     return
   }
+  if (req.method === 'GET' && req.url.endsWith('/models')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(
+      JSON.stringify({
+        object: 'list',
+        data: [{ id: 'euler-e2e', object: 'model', owned_by: 'e2e' }],
+      }),
+    )
+    return
+  }
   if (req.method === 'POST' && req.url.endsWith('/chat/completions')) {
     let raw = ''
     req.on('data', (part) => {

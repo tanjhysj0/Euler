@@ -12,15 +12,22 @@ test('真实模型完成一轮任务并生成文件', async ({ page }) => {
   await page.getByRole('button', { name: '新建模型配置' }).click()
   await page.getByLabel('名称').fill(PROFILE_NAME)
   await page.getByLabel('Base URL').fill(BASE_URL)
-  await page.getByLabel('模型', { exact: true }).fill(MODEL)
   await page.getByRole('radio', { name: '环境变量' }).click()
   await page.getByLabel('环境变量名').fill('OPENAI_API_KEY')
+  await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.url().includes('/model-profiles/models') && response.ok(),
+    ),
+    page.locator('#model').click(),
+  ])
+  await page.locator('#model').fill(MODEL)
+  await page.locator('#model').press('Enter')
   await page.getByRole('button', { name: '保存' }).click()
   await expect(page.getByText(PROFILE_NAME)).toBeVisible()
 
   await page.goto('/')
   await page.getByRole('button', { name: '新建会话' }).click()
-  await page.getByRole('button', { name: '创建会话' }).click()
   await expect(page.getByPlaceholder('输入消息')).toBeVisible()
 
   await page

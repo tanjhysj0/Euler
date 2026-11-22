@@ -19,6 +19,8 @@ const (
 	codeNotFound             = "not_found"
 	codeInternalError        = "internal_error"
 	codeWorkspaceUnavailable = "workspace_unavailable"
+	codeModelProfileRequired = "model_profile_required"
+	codeSessionHasActiveRun  = "session_has_active_run"
 	defaultQueryInt          = 0
 )
 
@@ -87,6 +89,8 @@ func (h *Handler) Register(group *gin.RouterGroup) {
 	group.POST("/sessions", h.create)
 	group.GET("/sessions", h.list)
 	group.GET("/sessions/:id", h.get)
+	group.PATCH("/sessions/:id", h.update)
+	group.DELETE("/sessions/:id", h.delete)
 	group.GET("/sessions/:id/messages", h.messages)
 }
 
@@ -95,14 +99,14 @@ type createSessionRequest struct {
 	Path      string    `json:"path"`
 }
 
+type updateSessionRequest struct {
+	ModelProfileID uuid.UUID `json:"model_profile_id"`
+}
+
 func (h *Handler) create(c *gin.Context) {
 	var request createSessionRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		api.AbortWithError(c, http.StatusBadRequest, codeInvalidRequest, "请求体不是合法的 JSON")
-		return
-	}
-	if request.ProfileID == uuid.Nil {
-		api.AbortWithError(c, http.StatusBadRequest, codeInvalidRequest, "profile_id 不能为空")
 		return
 	}
 	result, err := h.service.Create(c.Request.Context(), CreateInput(request))
@@ -142,6 +146,36 @@ func (h *Handler) get(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, view)
+}
+
+func (h *Handler) update(c *gin.Context) {
+	id, ok := parseSessionID(c)
+	if !ok {
+		return
+	}
+	var request updateSessionRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		api.AbortWithError(c, http.StatusBadRequest, codeInvalidRequest, "请求体不是合法的 JSON")
+		return
+	}
+	view, err := h.service.UpdateModel(c.Request.Context(), id, request.ModelProfileID)
+	if err != nil {
+		abortSessionError(c, err, "更新会话失败")
+		return
+	}
+	c.JSON(http.StatusOK, view)
+}
+
+func (h *Handler) delete(c *gin.Context) {
+	id, ok := parseSessionID(c)
+	if !ok {
+		return
+	}
+	if err := h.service.Delete(c.Request.Context(), id); err != nil {
+		abortSessionError(c, err, "删除会话失败")
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 func (h *Handler) messages(c *gin.Context) {
@@ -206,6 +240,12 @@ func abortSessionError(c *gin.Context, err error, fallback string) {
 		api.AbortWithError(c, http.StatusNotFound, codeNotFound, "会话不存在")
 	case errors.Is(err, ErrInvalidInput):
 		api.AbortWithError(c, http.StatusBadRequest, codeInvalidRequest, "会话参数无效")
+	case errors.Is(err, ErrNoModelProfile):
+		api.AbortWithError(c, http.StatusBadRequest, codeModelProfileRequired,
+			"请先在模型设置中创建模型配置")
+	case errors.Is(err, ErrSessionHasActiveRun):
+		api.AbortWithError(c, http.StatusConflict, codeSessionHasActiveRun,
+			"会话有进行中的任务，请先停止")
 	case errors.Is(err, workspace.ErrUnavailable):
 		slog.Error("session workspace unavailable", "error", err)
 		api.AbortWithError(c, http.StatusServiceUnavailable, codeWorkspaceUnavailable,

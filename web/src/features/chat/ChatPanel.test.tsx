@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   ApprovalView,
   MessageView,
+  ModelProfile,
   RunEvent,
   RunSnapshot,
   RunStatus,
@@ -64,6 +65,25 @@ const session: SessionView = {
   last_active_at: '2026-11-18T10:00:00Z',
 }
 const session2: SessionView = { ...session, id: 's2', title: '会话二' }
+
+const profiles: ModelProfile[] = [
+  {
+    id: 'model-1',
+    name: '测试模型',
+    base_url: 'https://example.com/v1',
+    model: 'gpt-test',
+    secret_kind: 'environment',
+    secret_ref: 'TEST_API_KEY',
+  },
+  {
+    id: 'model-2',
+    name: '备用模型',
+    base_url: 'https://example.com/v1',
+    model: 'gpt-backup',
+    secret_kind: 'environment',
+    secret_ref: 'TEST_API_KEY',
+  },
+]
 
 const userMessage: MessageView = {
   id: 'm1',
@@ -143,6 +163,21 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   }
   if (url.startsWith('/api/v1/sessions/s2/messages')) {
     return ok({ messages: [], next_after: 0 })
+  }
+  if (url === '/api/v1/model-profiles' && method === 'GET') {
+    return ok(profiles)
+  }
+  if (url === '/api/v1/sessions/s1' && method === 'PATCH') {
+    const profile = profiles.find((item) => item.id === body?.model_profile_id) ?? profiles[0]
+    return ok({
+      ...session,
+      model: {
+        id: profile.id,
+        name: profile.name,
+        base_url: profile.base_url,
+        model: profile.model,
+      },
+    })
   }
   if (url === '/api/v1/runs/r1' && method === 'GET') {
     runFetchCount += 1
@@ -275,10 +310,10 @@ describe('ChatPanel', () => {
     expect(calls.some((c) => c.url === '/api/v1/sessions/s1/runs' && c.method === 'POST')).toBe(false)
   })
 
-  it('活跃 Run 禁用发送，停止需二次确认并立即刷新快照', async () => {
+  it('活跃 Run 在输入区右下角显示停止，确认后立即刷新快照', async () => {
     renderWithProviders(<ChatPanel session={session} />)
     await screen.findByText('运行中')
-    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: '发送' })).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '停止' }))
     expect(await screen.findByText('停止当前任务')).toBeVisible()
     await userEvent.click(screen.getByRole('button', { name: '确认停止' }))
@@ -287,6 +322,23 @@ describe('ChatPanel', () => {
     )
     expect(await screen.findByText('已取消')).toBeVisible()
     expect(screen.queryByRole('button', { name: '停止' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '发送' })).toBeDisabled()
+  })
+
+  it('输入区展示当前模型并支持切换', async () => {
+    messages = [userMessage, { ...streamingMessage, status: 'completed', content: '回答完毕' }]
+    snapshot = makeSnapshot('succeeded')
+    renderWithProviders(<ChatPanel session={session} />)
+    const modelSelect = await screen.findByRole('combobox', { name: '当前模型' })
+    expect(screen.getByText('测试模型')).toBeVisible()
+    await userEvent.click(modelSelect)
+    await userEvent.click(await screen.findByText('备用模型'))
+    await waitFor(() => {
+      const call = calls.find(
+        (item) => item.url === '/api/v1/sessions/s1' && item.method === 'PATCH',
+      )
+      expect(call?.body).toEqual({ model_profile_id: 'model-2' })
+    })
   })
 
   it('刷新后已取消 Run 恢复状态标签与助手消息文本', async () => {

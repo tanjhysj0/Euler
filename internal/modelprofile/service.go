@@ -30,6 +30,12 @@ var (
 	ErrSecretRefInUse = fmt.Errorf("%w: keychain reference already in use", ErrInvalidInput)
 	// ErrSecretUnavailable 标记无法读取或写入的密钥。
 	ErrSecretUnavailable = errors.New("model profile secret unavailable")
+	// ErrNotFound 标记不存在的模型配置。
+	ErrNotFound = errors.New("model profile not found")
+	// ErrLastProfile 标记删除最后一个模型配置的请求。
+	ErrLastProfile = errors.New("at least one model profile is required")
+	// ErrModelListUnavailable 标记远程模型列表获取失败。
+	ErrModelListUnavailable = errors.New("model list unavailable")
 
 	environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )

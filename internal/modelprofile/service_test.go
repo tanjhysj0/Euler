@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"euler/internal/persistence"
 )
@@ -162,10 +165,84 @@ func TestListReturnsProfilesWithoutKeychainSecrets(t *testing.T) {
 	require.Equal(t, repo.profiles[0].SecretRef, profiles[0].SecretRef)
 }
 
+func TestUpdateKeychainProfileKeepsSecretWhenKeyOmitted(t *testing.T) {
+	secrets := newFakeSecretStore()
+	repo := newFakeProfileRepository()
+	svc := NewService(repo, secrets)
+	created, err := svc.Create(context.Background(), CreateInput{
+		Name: "old", BaseURL: "https://api.example/v1", Model: "a",
+		SecretKind: SecretKindKeychain, SecretRef: "euler/update", APIKey: "sk-keep",
+	})
+	require.NoError(t, err)
+	updated, err := svc.Update(context.Background(), created.ID, updateInput{
+		Name: "new", BaseURL: "https://api.example/v2", Model: "b",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "new", updated.Name)
+	require.Equal(t, "b", updated.Model)
+	require.Equal(t, "sk-keep", secrets.values["euler/update"])
+}
+
+func TestUpdateProfileValidatesRequiredFields(t *testing.T) {
+	svc := NewService(newFakeProfileRepository(), newFakeSecretStore())
+	_, err := svc.Update(context.Background(), uuid.MustParse(environmentProfileID), updateInput{
+		Name: "only-name",
+	})
+	require.ErrorIs(t, err, ErrInvalidInput)
+}
+
+func TestDeleteMissingProfile(t *testing.T) {
+	svc := NewService(newFakeProfileRepository(), newFakeSecretStore())
+	_, err := svc.Delete(context.Background(), uuid.Must(uuid.NewRandom()))
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestListModelsUsesAPIKeyAndSorts(t *testing.T) {
+	var authorization string
+	server := httptest.NewServer(http.HandlerFunc(
+		func(writer http.ResponseWriter, request *http.Request) {
+			authorization = request.Header.Get("Authorization")
+			if request.URL.Path != "/v1/models" {
+				t.Errorf("unexpected path %s", request.URL.Path)
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			body := []byte(`{"data":[{"id":"b"},{"id":"a"},{"id":"a"}]}`)
+			if _, err := writer.Write(body); err != nil {
+				t.Errorf("write response: %v", err)
+			}
+		},
+	))
+	defer server.Close()
+	svc := NewService(newFakeProfileRepository(), newFakeSecretStore())
+	models, err := svc.ListModels(context.Background(), listModelsInput{
+		BaseURL: server.URL + "/v1", APIKey: "sk-test",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b"}, models)
+	require.Equal(t, "Bearer sk-test", authorization)
+}
+
+func TestListModelsMapsUpstreamFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(
+		func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(http.StatusUnauthorized)
+		},
+	))
+	defer server.Close()
+	svc := NewService(newFakeProfileRepository(), newFakeSecretStore())
+	_, err := svc.ListModels(context.Background(), listModelsInput{
+		BaseURL: server.URL, APIKey: "sk-test",
+	})
+	require.ErrorIs(t, err, ErrModelListUnavailable)
+}
+
 type fakeProfileRepository struct {
 	profiles  []persistence.ModelProfile
 	lastJSON  string
 	createErr error
+	updateErr error
+	deleteErr error
+	rebound   int64
 }
 
 func newFakeProfileRepository() *fakeProfileRepository {
@@ -192,6 +269,34 @@ func (f *fakeProfileRepository) Create(_ context.Context, profile persistence.Mo
 	return nil
 }
 
+func (f *fakeProfileRepository) Update(
+	_ context.Context, profile persistence.ModelProfile,
+) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	for index := range f.profiles {
+		if f.profiles[index].ID == profile.ID {
+			f.profiles[index] = profile
+			return nil
+		}
+	}
+	return gorm.ErrRecordNotFound
+}
+
+func (f *fakeProfileRepository) Delete(_ context.Context, id uuid.UUID) (int64, error) {
+	if f.deleteErr != nil {
+		return 0, f.deleteErr
+	}
+	for index := range f.profiles {
+		if f.profiles[index].ID == id {
+			f.profiles = append(f.profiles[:index], f.profiles[index+1:]...)
+			return f.rebound, nil
+		}
+	}
+	return 0, gorm.ErrRecordNotFound
+}
+
 func (f *fakeProfileRepository) List(_ context.Context) ([]persistence.ModelProfile, error) {
 	return append([]persistence.ModelProfile(nil), f.profiles...), nil
 }
@@ -204,7 +309,7 @@ func (f *fakeProfileRepository) Get(
 			return profile, nil
 		}
 	}
-	return persistence.ModelProfile{}, errors.New("model profile not found")
+	return persistence.ModelProfile{}, gorm.ErrRecordNotFound
 }
 
 type fakeSecretStore struct {

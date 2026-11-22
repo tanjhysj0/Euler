@@ -32,6 +32,30 @@ body,
   font-size: 12px;
 }
 
+/* 输入区：发送/停止按钮与模型切换浮在文本框右下角。 */
+.composer {
+  position: relative;
+}
+
+.composer textarea {
+  padding-bottom: 44px;
+}
+
+.composer-actions {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 16px);
+}
+
+.composer-model {
+  min-width: 120px;
+  max-width: 240px;
+}
+
 /* 终端块：正文 shell 代码块与 shell 工具结果共用。 */
 .terminal-block {
   margin: 8px 0;

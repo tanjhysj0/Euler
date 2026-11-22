@@ -1,4 +1,4 @@
-import { Alert, Button, Empty, Input, message, Modal, Space, Tag, Typography } from 'antd'
+import { Alert, Button, Empty, Input, message, Modal, Select, Space, Tag, Typography } from 'antd'
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { APIError } from '../../api/client'
@@ -6,8 +6,10 @@ import {
   useApprovalDecision,
   useCancelRun,
   useMessages,
+  useModelProfiles,
   useRunSnapshot,
   useStartRun,
+  useUpdateSessionModel,
 } from '../../api/queries'
 import type { ConnectionStatus } from '../../stores/run'
 import type { RunStatus, SessionView } from '../../api/types'
@@ -69,9 +71,33 @@ export default function ChatPanel({ session }: ChatPanelProps) {
   const startRun = useStartRun(session.id)
   const cancelRun = useCancelRun(runId)
   const decide = useApprovalDecision(runId)
+  const profilesQuery = useModelProfiles()
+  const updateModel = useUpdateSessionModel(session.id)
   const [sendError, setSendError] = useState<string | null>(null)
   const [stopOpen, setStopOpen] = useState(false)
   const [showWorkspaceWarning, setShowWorkspaceWarning] = useState(false)
+
+  // 模型列表可能尚未加载或缺少当前会话的配置，补一个当前项保证下拉框
+  // 始终显示模型名称而不是原始 ID。
+  const profiles = profilesQuery.data ?? []
+  const modelOptions = profiles.map((profile) => ({
+    value: profile.id,
+    label: profile.name,
+  }))
+  if (!profiles.some((profile) => profile.id === session.model.id)) {
+    modelOptions.unshift({ value: session.model.id, label: session.model.name })
+  }
+
+  async function changeModel(profileId: string) {
+    if (profileId === session.model.id) {
+      return
+    }
+    try {
+      await updateModel.mutateAsync(profileId)
+    } catch (err) {
+      message.error(err instanceof APIError ? err.message : '切换模型失败')
+    }
+  }
 
   async function send() {
     const content = draft.trim()
@@ -117,11 +143,6 @@ export default function ChatPanel({ session }: ChatPanelProps) {
         {active && connection && (
           <Typography.Text type="secondary">{connectionLabels[connection]}</Typography.Text>
         )}
-        {active && (
-          <Button danger autoInsertSpace={false} onClick={() => setStopOpen(true)}>
-            停止
-          </Button>
-        )}
       </Space>
       {snapshot?.run.status === 'failed' && (
         <Alert
@@ -144,26 +165,48 @@ export default function ChatPanel({ session }: ChatPanelProps) {
         <MessageList messages={messages} deltas={deltas} reasoning={reasoning} />
       )}
       <ToolTimeline snapshot={snapshot} onDecide={onDecide} />
-      <Input.TextArea
-        placeholder="输入消息"
-        value={draft}
-        autoSize={{ minRows: 2, maxRows: 6 }}
-        onChange={(event) => setDraft(session.id, event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-            event.preventDefault()
-            void send()
-          }
-        }}
-      />
-      <Button
-        type="primary"
-        autoInsertSpace={false}
-        disabled={active || startRun.isPending || draft.trim() === ''}
-        onClick={() => void send()}
-      >
-        发送
-      </Button>
+      <div className="composer">
+        <Input.TextArea
+          placeholder="输入消息"
+          value={draft}
+          autoSize={{ minRows: 2, maxRows: 6 }}
+          onChange={(event) => setDraft(session.id, event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault()
+              void send()
+            }
+          }}
+        />
+        <div className="composer-actions">
+          <Select
+            className="composer-model"
+            size="small"
+            variant="borderless"
+            aria-label="当前模型"
+            value={session.model.id}
+            options={modelOptions}
+            loading={profilesQuery.isPending}
+            disabled={active || updateModel.isPending}
+            popupMatchSelectWidth={false}
+            onChange={(profileId: string) => void changeModel(profileId)}
+          />
+          {active ? (
+            <Button danger autoInsertSpace={false} onClick={() => setStopOpen(true)}>
+              停止
+            </Button>
+          ) : (
+            <Button
+              type="primary"
+              autoInsertSpace={false}
+              disabled={startRun.isPending || draft.trim() === ''}
+              onClick={() => void send()}
+            >
+              发送
+            </Button>
+          )}
+        </div>
+      </div>
       <Modal
         open={stopOpen}
         title="停止当前任务"

@@ -12,18 +12,32 @@ async function ensureProfile(page: Page, name = PROFILE_NAME) {
   await page.getByRole('button', { name: '新建模型配置' }).click()
   await page.getByLabel('名称').fill(name)
   await page.getByLabel('Base URL').fill('http://127.0.0.1:18081/v1')
-  await page.getByLabel('模型', { exact: true }).fill('euler-e2e')
   await page.getByRole('radio', { name: '环境变量' }).click()
   await page.getByLabel('环境变量名').fill('EULER_TEST_MODEL_KEY')
+  await fetchAndSelectModel(page, 'euler-e2e')
   await page.getByRole('button', { name: '保存' }).click()
   await expect(page.getByText(name)).toBeVisible()
+}
+
+// fetchAndSelectModel 聚焦模型选择框触发远程拉取，mock 只返回一个模型，
+// 页面会自动选中它。
+async function fetchAndSelectModel(page: Page, model: string) {
+  await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.url().includes('/model-profiles/models') && response.ok(),
+    ),
+    page.locator('#model').click(),
+  ])
+  await expect(
+    page.getByRole('dialog').getByText(model, { exact: true }).first(),
+  ).toBeVisible()
 }
 
 // newSession 新建一个使用默认自动工作区的会话，并等待输入框就绪。
 async function newSession(page: Page) {
   await page.goto('/')
   await page.getByRole('button', { name: '新建会话' }).click()
-  await page.getByRole('button', { name: '创建会话' }).click()
   await expect(page.getByPlaceholder('输入消息')).toBeVisible()
 }
 
@@ -191,20 +205,18 @@ test('历史中的空助手消息不会导致下一轮 400', async ({ page }) =>
   await expect(page.getByText('失败')).toHaveCount(0)
 })
 
-test('新建会话时可以切换模型配置并生效', async ({ page }) => {
+test('新建会话使用默认模型，并可在输入区切换模型', async ({ page }) => {
   await ensureProfile(page)
   await ensureProfile(page, ALT_PROFILE_NAME)
-  await page.goto('/')
-  await page.getByRole('button', { name: '新建会话' }).click()
-  // antd Select 的下拉挂在 body 的 portal 中；只点当前可见的下拉容器。
-  await page.getByRole('combobox').click()
+  await newSession(page)
+  // 新建会话不再选择模型，输入区默认展示最早创建的模型配置。
+  await expect(page.getByText(PROFILE_NAME).first()).toBeVisible()
+
+  // 通过输入区右下角的模型下拉切换，会话头部同步展示新模型。
+  await page.locator('.composer').getByRole('combobox').click()
   const dropdown = page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)')
   await dropdown.getByText(ALT_PROFILE_NAME, { exact: true }).click()
-  await page.getByRole('button', { name: '创建会话' }).click()
-
-  await expect(page.getByPlaceholder('输入消息')).toBeVisible()
-  // 会话头部展示所选模型，确认选择确实提交到了后端。
-  await expect(page.getByText(ALT_PROFILE_NAME)).toBeVisible()
+  await expect(page.getByText(ALT_PROFILE_NAME).first()).toBeVisible()
 })
 
 test('连续新建的会话自动分配不同工作区', async ({ page }) => {
@@ -229,7 +241,6 @@ test('多会话创建、搜索过滤与切换', async ({ page }) => {
 
   await newSession(page)
   await page.getByRole('button', { name: '新建会话' }).click()
-  await page.getByRole('button', { name: '创建会话' }).click()
   await expect(items).toHaveCount(before + 2)
 
   // 搜索只保留匹配标题的会话。
@@ -242,4 +253,34 @@ test('多会话创建、搜索过滤与切换', async ({ page }) => {
   // 点击侧栏项切换会话，右侧对话面板随之加载。
   await items.first().click()
   await expect(page.getByPlaceholder('输入消息')).toBeVisible()
+})
+
+test('模型配置支持编辑与删除', async ({ page }) => {
+  const name = '待删除模型'
+  const editedName = '已改名模型'
+  // 后端要求至少保留一个模型配置，先确保默认配置存在。
+  await ensureProfile(page)
+  await page.goto('/settings')
+  await page.getByRole('button', { name: '新建模型配置' }).click()
+  await page.getByLabel('名称').fill(name)
+  await page.getByLabel('Base URL').fill('http://127.0.0.1:18081/v1')
+  await page.getByRole('radio', { name: '环境变量' }).click()
+  await page.getByLabel('环境变量名').fill('EULER_TEST_MODEL_KEY')
+  await fetchAndSelectModel(page, 'euler-e2e')
+  await page.getByRole('button', { name: '保存' }).click()
+
+  const row = page.getByRole('row').filter({ hasText: name })
+  await expect(row).toBeVisible()
+
+  // 编辑名称后保存，列表展示新名称。
+  await row.getByRole('button', { name: '编辑' }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByLabel('名称').fill(editedName)
+  await dialog.getByRole('button', { name: '保存' }).click()
+  const editedRow = page.getByRole('row').filter({ hasText: editedName })
+  await expect(editedRow).toBeVisible()
+
+  // 删除后该配置从列表消失。
+  await editedRow.getByRole('button', { name: '删除' }).click()
+  await expect(editedRow).toHaveCount(0)
 })

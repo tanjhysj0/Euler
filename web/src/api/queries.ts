@@ -6,13 +6,17 @@ import type {
   CreateModelProfileInput,
   CreateSessionInput,
   CreateSessionResult,
+  DeleteModelProfileResult,
   FileNode,
+  ListModelsInput,
   MessagePage,
   MessageView,
+  ModelListResult,
   ModelProfile,
   RunSnapshot,
   SessionView,
   StartRunResult,
+  UpdateModelProfileInput,
 } from './types'
 
 export interface SessionListFilter {
@@ -64,6 +68,32 @@ export function useCreateSession() {
   })
 }
 
+// useUpdateSessionModel 切换会话的模型配置；沿用后端返回的会话视图刷新缓存。
+export function useUpdateSessionModel(sessionId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (profileId: string) =>
+      apiFetch<SessionView>(`/sessions/${sessionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ model_profile_id: profileId }),
+      }),
+    onSuccess: (session) => {
+      queryClient.setQueryData(['sessions', 'detail', sessionId], session)
+      void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+    },
+  })
+}
+
+// useDeleteSession 删除会话；后端要求会话没有进行中的 Run。
+export function useDeleteSession() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (sessionId: string) =>
+      apiFetch<void>(`/sessions/${sessionId}`, { method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sessions'] }),
+  })
+}
+
 export function useModelProfiles() {
   return useQuery({
     queryKey: ['model-profiles'],
@@ -80,6 +110,46 @@ export function useCreateModelProfile() {
         body: JSON.stringify(input),
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['model-profiles'] }),
+  })
+}
+
+// useUpdateModelProfile 修改模型配置；api_key 留空时后端保留原密钥。
+export function useUpdateModelProfile() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: UpdateModelProfileInput }) =>
+      apiFetch<ModelProfile>(`/model-profiles/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['model-profiles'] })
+      void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+    },
+  })
+}
+
+// useDeleteModelProfile 删除模型配置；后端会把引用它的会话改绑到默认模型。
+export function useDeleteModelProfile() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<DeleteModelProfileResult>(`/model-profiles/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['model-profiles'] })
+      void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+    },
+  })
+}
+
+// useListAvailableModels 使用表单里的 Base URL 与 API Key 远程拉取模型列表。
+export function useListAvailableModels() {
+  return useMutation({
+    mutationFn: (input: ListModelsInput) =>
+      apiFetch<ModelListResult>('/model-profiles/models', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
   })
 }
 
