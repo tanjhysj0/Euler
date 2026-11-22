@@ -24,6 +24,15 @@ Euler 是一个本地优先的编码 Agent 工作台：由 Go 后端、React 控
 - **全链路追踪**：可选接入 Langfuse，记录每次模型调用与工具调用。
 - **Harbor 评测**：`euler-agent` 二进制直接上传到任务容器内执行，不需要宿主机服务或工作区挂载；内置按难度分组的精选任务清单。
 
+## 文档索引
+
+| 文档 | 说明 |
+|---|---|
+| [数据结构说明](docs/data-structures.md) | 数据库表、状态机、消息片段、HTTP DTO、SSE 事件载荷与工具输入输出契约 |
+| [Agent 工作台设计](docs/superpowers/specs/2026-11-17-euler-agent-workbench-design.md) | 工作台的总体设计与关键取舍 |
+| [编码评测设计](docs/superpowers/specs/2026-11-19-euler-coding-eval-design.md) | 编码评测链路与预算设计 |
+| [Harbor 集成设计](docs/superpowers/specs/2026-11-19-euler-harbor-integration-design.md) | Harbor 任务、容器执行与结果回传 |
+
 ## 架构
 
 ```
@@ -68,7 +77,7 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 | `web/` | React 控制台（Vite + Ant Design + TanStack Query + Zustand） |
 | `harbor_eval/` | Harbor Agent、任务清单、筛选脚本与运行结果 |
 | `migrations/` | Postgres SQL 迁移 |
-| `docs/` | 设计文档与实现计划 |
+| `docs/` | 设计文档、数据结构说明与实现计划 |
 | `docs/assets/` | README 演示素材（`demo.mp4` 与内嵌预览 `demo.gif`） |
 
 ## 快速开始
