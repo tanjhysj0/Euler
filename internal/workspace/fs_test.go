@@ -116,16 +116,17 @@ func TestFileStoreListDirShallow(t *testing.T) {
 	writeTestFile(t, filepath.Join(root, "top.txt"), "hi")
 	store := NewFileStore(root, 64*1024)
 
-	nodes, err := store.ListDir(context.Background(), "")
+	nodes, err := store.ListDir(context.Background(), "", "", 0)
 	require.NoError(t, err)
-	require.Equal(t, []string{"alpha", "top.txt"}, nodePaths(nodes))
-	require.Equal(t, typeDir, nodes[0].Type)
-	require.Equal(t, typeFile, nodes[1].Type)
-	require.Equal(t, int64(len("hi")), nodes[1].Size)
+	require.Equal(t, []string{"alpha", "top.txt"}, nodePaths(nodes.Entries))
+	require.Equal(t, typeDir, nodes.Entries[0].Type)
+	require.Equal(t, typeFile, nodes.Entries[1].Type)
+	require.Equal(t, int64(len("hi")), nodes.Entries[1].Size)
+	require.False(t, nodes.HasMore)
 
-	inner, err := store.ListDir(context.Background(), "alpha")
+	inner, err := store.ListDir(context.Background(), "alpha", "", 0)
 	require.NoError(t, err)
-	require.Equal(t, []string{"alpha/beta", "alpha/one.txt"}, nodePaths(inner))
+	require.Equal(t, []string{"alpha/beta", "alpha/one.txt"}, nodePaths(inner.Entries))
 }
 
 func TestFileStoreListDirRejectsEscapeAndFiles(t *testing.T) {
@@ -133,25 +134,37 @@ func TestFileStoreListDirRejectsEscapeAndFiles(t *testing.T) {
 	writeTestFile(t, filepath.Join(root, "a.txt"), "x")
 	store := NewFileStore(root, 64*1024)
 
-	_, err := store.ListDir(context.Background(), "../outside")
+	_, err := store.ListDir(context.Background(), "../outside", "", 0)
 	require.ErrorIs(t, err, ErrOutsideWorkspace)
 
-	_, err = store.ListDir(context.Background(), "a.txt")
+	_, err = store.ListDir(context.Background(), "a.txt", "", 0)
 	require.ErrorIs(t, err, ErrNotDirectory)
 
-	_, err = store.ListDir(context.Background(), "missing")
+	_, err = store.ListDir(context.Background(), "missing", "", 0)
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
-func TestFileStoreListDirCapsEntries(t *testing.T) {
+func TestFileStoreListDirPagesThroughAllEntries(t *testing.T) {
 	root := t.TempDir()
-	for i := 0; i < maxListNodes+5; i++ {
+	const total = maxPageSize + 5
+	for i := 0; i < total; i++ {
 		writeTestFile(t, filepath.Join(root, strings.ToLower(padNumber(i))+".txt"), "x")
 	}
 	store := NewFileStore(root, 64*1024)
-	nodes, err := store.ListDir(context.Background(), ".")
-	require.NoError(t, err)
-	require.Len(t, nodes, maxListNodes)
+	var paths []string
+	cursor := emptyPath
+	for {
+		page, err := store.ListDir(context.Background(), ".", cursor, maxPageSize)
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(page.Entries), maxPageSize)
+		paths = append(paths, nodePaths(page.Entries)...)
+		if !page.HasMore {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	require.Len(t, paths, total)
+	require.IsIncreasing(t, paths)
 }
 
 func nodePaths(nodes []FileNode) []string {
@@ -162,7 +175,7 @@ func nodePaths(nodes []FileNode) []string {
 	return paths
 }
 
-func TestFileStoreSearchSortedAndCapped(t *testing.T) {
+func TestFileStoreSearchSortedAndPaged(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(root, "notes"), 0o700))
 	writeTestFile(t, filepath.Join(root, "report-a.txt"), "a")
@@ -170,19 +183,46 @@ func TestFileStoreSearchSortedAndCapped(t *testing.T) {
 	writeTestFile(t, filepath.Join(root, "notes", "report-c.txt"), "c")
 	writeTestFile(t, filepath.Join(root, "other.txt"), "d")
 	store := NewFileStore(root, 64*1024)
-	matches, err := store.Search(context.Background(), "report")
+	page, err := store.Search(context.Background(), "report", "", 0)
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"notes/report-c.txt", "report-a.txt", "report-b.txt",
-	}, matches)
+	}, page.Matches)
+	require.False(t, page.HasMore)
+}
 
-	for i := 0; i < maxSearchResults+5; i++ {
+// Search 只匹配路径，不读取文件内容：内容命中不应出现在结果里。
+func TestFileStoreSearchIgnoresFileContent(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "plain.txt"), "needle")
+	store := NewFileStore(root, 64*1024)
+	page, err := store.Search(context.Background(), "needle", "", 0)
+	require.NoError(t, err)
+	require.Empty(t, page.Matches)
+}
+
+func TestFileStoreSearchPagesThroughAllMatches(t *testing.T) {
+	root := t.TempDir()
+	const total = maxPageSize + 5
+	for i := 0; i < total; i++ {
 		writeTestFile(t, filepath.Join(root, "hit-"+padNumber(i)+".txt"), "x")
 	}
-	capped, err := store.Search(context.Background(), "hit-")
-	require.NoError(t, err)
-	require.Len(t, capped, maxSearchResults)
-	for i, match := range capped {
+	store := NewFileStore(root, 64*1024)
+	var matches []string
+	cursor := emptyPath
+	for {
+		page, err := store.Search(context.Background(), "hit-", cursor, maxPageSize)
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(page.Matches), maxPageSize)
+		matches = append(matches, page.Matches...)
+		if !page.HasMore {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	require.Len(t, matches, total)
+	require.IsIncreasing(t, matches)
+	for i, match := range matches {
 		require.Equal(t, "hit-"+padNumber(i)+".txt", match)
 	}
 }

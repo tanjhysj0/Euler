@@ -32,9 +32,15 @@ type CallRecorder interface {
 // FileStore 是文件工具依赖的工作区端口。生产实现是 workspace.FileStore，
 // 测试可以用内存实现替代。
 type FileStore interface {
-	Read(ctx context.Context, path string) ([]byte, error)
-	ListDir(ctx context.Context, dir string) ([]workspace.FileNode, error)
-	Search(ctx context.Context, query string) ([]string, error)
+	ReadLines(
+		ctx context.Context, path string, offset, limit int,
+	) (workspace.LinePage, error)
+	ListDir(
+		ctx context.Context, dir, cursor string, limit int,
+	) (workspace.NodePage, error)
+	Search(
+		ctx context.Context, query, cursor string, limit int,
+	) (workspace.SearchPage, error)
 	PrepareWrite(ctx context.Context, path string, content []byte) (workspace.FileChange, error)
 	PreparePatch(
 		ctx context.Context, path, oldString, newString string,

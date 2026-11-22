@@ -76,10 +76,12 @@ docker compose up -d postgres
 
 ### 2. 配置
 
-服务从 `~/.euler/config.yaml` 读取配置（不存在则使用默认值），数据库地址必须通过环境变量提供：
+服务从 `~/.euler/config.yaml` 读取配置（不存在则使用默认值）。`make dev-api` 与
+`make dev-restart` 默认使用与 `compose.yaml` 一致的数据库地址，无需手工导出；
+需要指向其他库时用环境变量覆盖：
 
 ```bash
-export EULER_DATABASE_URL='postgres://euler:euler@127.0.0.1:5432/euler?sslmode=disable'
+EULER_DATABASE_URL='postgres://user:pass@127.0.0.1:5432/euler?sslmode=disable' make dev-api
 ```
 
 可选追踪配置：
@@ -90,6 +92,11 @@ export EULER_LANGFUSE_PUBLIC_KEY='pk-...'
 export EULER_LANGFUSE_SECRET_KEY='sk-...'
 ```
 
+`make dev-api` 会自动从 `~/.zprofile` 读取 `LANGFUSE_HOST`、`LANGFUSE_BASE_URL`、
+`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`，因此本地用 Web 界面调试时默认带上追踪；
+未配置这些变量则不追踪。E2E 使用独立的配置文件与变量，不会上传追踪数据。
+启动日志出现 `langfuse tracing enabled` 表示生效。
+
 模型、Base URL 和 API Key 通过控制台的「模型配置」创建，密钥写入 macOS Keychain。
 
 ### 3. 启动
@@ -98,7 +105,16 @@ export EULER_LANGFUSE_SECRET_KEY='sk-...'
 # 后端（默认 127.0.0.1:8080）
 make dev-api
 
-# 前端开发服务器（127.0.0.1:5173，代理 /api 与 /health 到 8080）
+# 改完后端代码后重启后端
+make dev-restart
+
+# 前后端一起重启：后端 8080 + 前端开发服务器 5173
+make dev-restart-all
+
+# 改完前端代码后使用：重新构建嵌入产物再重启后端（不走 5173 时用这个）
+make dev-reload
+
+# 只启动前端开发服务器（127.0.0.1:5173，代理 /api 与 /health 到 8080，热更新）
 make dev-web
 ```
 

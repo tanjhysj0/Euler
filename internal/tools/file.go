@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/cloudwego/eino/components/tool"
 
@@ -10,17 +11,30 @@ import (
 )
 
 type fileReadInput struct {
-	Path string `json:"path" jsonschema:"description=工作区内的文件路径"`
+	Path   string `json:"path" jsonschema:"description=工作区内的文件路径"`
+	Offset int    `json:"offset,omitempty" jsonschema:"description=起始行号（从 1 开始），省略表示从第 1 行读起"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"description=本次最多返回的行数，省略时默认 2000，上限 5000"`
 }
 
 const emptyPath = ""
 
+const (
+	// indexOffset 把长度换算成最后一个元素的下标。
+	indexOffset = 1
+	// lineFeedBytes 是拼回多行文本时每行额外的换行符字节数。
+	lineFeedBytes = 1
+)
+
 type fileListInput struct {
-	Path string `json:"path" jsonschema:"description=要列出的目录，相对工作区根；省略则列出根目录"`
+	Path   string `json:"path" jsonschema:"description=要列出的目录，相对工作区根；省略则列出根目录"`
+	Cursor string `json:"cursor,omitempty" jsonschema:"description=上一页返回的 next_cursor，省略表示第一页"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"description=每页条目数，省略时默认 200，上限 500"`
 }
 
 type fileSearchInput struct {
-	Query string `json:"query" jsonschema:"description=搜索关键词"`
+	Query  string `json:"query" jsonschema:"description=按路径匹配的关键词，不搜索文件内容"`
+	Cursor string `json:"cursor,omitempty" jsonschema:"description=上一页返回的 next_cursor，省略表示第一页"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"description=每页结果数，省略时默认 200，上限 500"`
 }
 
 type fileWriteInput struct {
@@ -48,13 +62,16 @@ func (r *Registry) fileTools(files FileStore) ([]tool.BaseTool, error) {
 	set := fileToolset{registry: r, files: files}
 	builders := []func() (tool.BaseTool, error){
 		func() (tool.BaseTool, error) {
-			return registerTool(r, "file_read", "读取工作区内文件内容", set.read)
+			return registerTool(r, "file_read",
+				"按行读取工作区内文件，支持 offset/limit 分页", set.read)
 		},
 		func() (tool.BaseTool, error) {
-			return registerTool(r, "file_list", "列出工作区内某个目录的直接子项", set.list)
+			return registerTool(r, "file_list",
+				"分页列出工作区内某个目录的直接子项", set.list)
 		},
 		func() (tool.BaseTool, error) {
-			return registerTool(r, "file_search", "按文件名或内容搜索工作区", set.search)
+			return registerTool(r, "file_search",
+				"按路径关键词分页搜索工作区，不搜文件内容", set.search)
 		},
 		func() (tool.BaseTool, error) {
 			return registerTool(r, "file_write", "写入完整文件内容（需用户批准）", set.write)
@@ -78,38 +95,110 @@ func (r *Registry) fileTools(files FileStore) ([]tool.BaseTool, error) {
 }
 
 func (s fileToolset) read(ctx context.Context, input fileReadInput) (toolOutcome, error) {
-	data, err := s.files.Read(ctx, input.Path)
+	page, err := s.files.ReadLines(ctx, input.Path, input.Offset, input.Limit)
 	if err != nil {
 		return failedOutcome(fileFailure(err, input.Path)), nil
 	}
-	return completedOutcome(map[string]any{
-		"path": input.Path, "content": s.registry.truncate(string(data)),
-	}), nil
+	view := s.fitLines(page)
+	payload := map[string]any{
+		"path": input.Path, "content": view.content,
+		"start_line": page.StartLine, "end_line": view.endLine, "has_more": view.hasMore,
+	}
+	if view.hasMore {
+		payload["next_offset"] = view.nextOffset
+	}
+	return completedOutcome(payload), nil
+}
+
+// lineView 是在输出字节预算内裁剪后的行视图。
+type lineView struct {
+	content    string
+	endLine    int
+	hasMore    bool
+	nextOffset int
+}
+
+// fitLines 在输出字节预算内按行回退内容，保证 start_line/end_line
+// 与实际返回的文本一致，并给出下一页的起始行号。
+func (s fileToolset) fitLines(page workspace.LinePage) lineView {
+	view := lineView{
+		content: page.Content, endLine: page.EndLine,
+		hasMore: page.HasMore, nextOffset: page.NextOffset,
+	}
+	limit := s.registry.deps.MaxOutputBytes
+	if limit <= noOutputLimit || len(view.content) <= limit {
+		return view
+	}
+	lines := strings.Split(view.content, "\n")
+	kept, size := emptyCapacity, emptyCapacity
+	for _, line := range lines {
+		if kept > emptyCapacity && size+len(line)+lineFeedBytes > limit {
+			break
+		}
+		size += len(line) + lineFeedBytes
+		kept++
+	}
+	if kept >= len(lines) {
+		return view
+	}
+	return lineView{
+		content:    strings.Join(lines[:kept], "\n"),
+		endLine:    page.StartLine + kept - indexOffset,
+		hasMore:    true,
+		nextOffset: page.StartLine + kept,
+	}
 }
 
 func (s fileToolset) list(ctx context.Context, input fileListInput) (toolOutcome, error) {
-	nodes, err := s.files.ListDir(ctx, input.Path)
+	page, err := s.files.ListDir(ctx, input.Path, input.Cursor, input.Limit)
 	if err != nil {
 		return failedOutcome(fileFailure(err, input.Path)), nil
 	}
-	entries := make([]map[string]any, emptyCapacity, len(nodes))
-	for _, node := range nodes {
+	entries := make([]map[string]any, emptyCapacity, len(page.Entries))
+	for _, node := range page.Entries {
 		entries = append(entries, map[string]any{
 			"path": node.Path, "type": node.Type, "size": node.Size,
 		})
 	}
-	return completedOutcome(cappedList(s.registry, "entries", entries)), nil
+	payload := cappedList(s.registry, "entries", entries)
+	kept, typed := payload["entries"].([]map[string]any)
+	if !typed {
+		kept = entries
+	}
+	nextCursor := page.NextCursor
+	if len(kept) < len(entries) && len(kept) > emptyCapacity {
+		if last, ok := kept[len(kept)-indexOffset]["path"].(string); ok {
+			nextCursor = last
+		}
+	}
+	delete(payload, "truncated")
+	payload["has_more"] = page.HasMore || len(kept) < len(entries)
+	payload["next_cursor"] = nextCursor
+	return completedOutcome(payload), nil
 }
 
 func (s fileToolset) search(ctx context.Context, input fileSearchInput) (toolOutcome, error) {
-	matches, err := s.files.Search(ctx, input.Query)
+	page, err := s.files.Search(ctx, input.Query, input.Cursor, input.Limit)
 	if err != nil {
 		return failedOutcome(fileFailure(err, emptyPath)), nil
 	}
+	matches := page.Matches
 	if matches == nil {
 		matches = []string{}
 	}
-	return completedOutcome(cappedList(s.registry, "matches", matches)), nil
+	payload := cappedList(s.registry, "matches", matches)
+	kept, typed := payload["matches"].([]string)
+	if !typed {
+		kept = matches
+	}
+	nextCursor := page.NextCursor
+	if len(kept) < len(matches) && len(kept) > emptyCapacity {
+		nextCursor = kept[len(kept)-indexOffset]
+	}
+	delete(payload, "truncated")
+	payload["has_more"] = page.HasMore || len(kept) < len(matches)
+	payload["next_cursor"] = nextCursor
+	return completedOutcome(payload), nil
 }
 
 func (s fileToolset) write(ctx context.Context, input fileWriteInput) (toolOutcome, error) {
@@ -163,6 +252,8 @@ func fileFailure(err error, path string) map[string]any {
 		code, message = "path_outside_workspace", "路径超出工作区"
 	case errors.Is(err, workspace.ErrTooLarge):
 		code, message = "file_too_large", "文件过大"
+	case errors.Is(err, workspace.ErrLineTooLong):
+		code, message = "line_too_long", "存在超长行，无法按行读取；请改用 shell 工具处理"
 	case errors.Is(err, workspace.ErrNotRegularFile):
 		code, message = "not_regular_file", "不是普通文件"
 	case errors.Is(err, workspace.ErrNotDirectory):

@@ -1,4 +1,12 @@
-.PHONY: build test lint fmt tidy web-install web-test web-build test-e2e test-smoke dev-api dev-web harbor-test harbor-test-easy harbor-test-medium harbor-test-hard harbor-test-all agent-dist
+.PHONY: build test lint fmt tidy web-install web-test web-build test-e2e test-smoke dev-api dev-restart dev-restart-all dev-reload dev-web-restart dev-stop dev-web harbor-test harbor-test-easy harbor-test-medium harbor-test-hard harbor-test-all agent-dist
+
+# 本地调试服务的端口与配置文件；EULER_CONFIG 留空时使用默认的 ~/.euler/config.yaml。
+EULER_PORT ?= 8080
+# 前端开发服务器端口，与 vite.config.ts 的 server.port 保持一致。
+WEB_PORT ?= 5173
+EULER_CONFIG ?=
+# 本地开发库地址，默认与 compose.yaml 的凭据一致；同名环境变量优先。
+EULER_DATABASE_URL ?= postgres://euler:euler@127.0.0.1:5432/euler?sslmode=disable
 
 # Harbor 评测使用的默认模型；可用同名环境变量覆盖。
 EULER_MODEL_BASE_URL ?= https://api.deepseek.com
@@ -65,6 +73,8 @@ web-test:
 web-build:
 	npm --prefix web run build
 
+# 端到端测试：使用独立的 18080 端口与 euler_test 库，不会影响本地调试服务。
+# 但它验证的是当前源码；若同时开着手工调试的界面，跑完后请执行 make dev-restart。
 test-e2e:
 	npm --prefix web run test:e2e
 
@@ -77,8 +87,67 @@ test-smoke:
 	test -n "$${OPENAI_API_KEY:-}" || (echo "缺少 OPENAI_API_KEY" >&2; exit 1); \
 	OPENAI_API_KEY="$${OPENAI_API_KEY}" npm --prefix web run test:smoke
 
+# 本地调试服务：手工用 Web 界面测试时默认开启 Langfuse 追踪，
+# 未配置密钥时静默跳过。E2E 使用自己的配置文件与变量，不受影响。
 dev-api:
-	go run ./cmd/euler
+	@if [ -z "$${LANGFUSE_SECRET_KEY:-}" ] && [ -f "$$HOME/.zprofile" ]; then \
+		set -a; . "$$HOME/.zprofile" >/dev/null 2>&1 || true; set +a; \
+	fi; \
+	EULER_DATABASE_URL='$(EULER_DATABASE_URL)' \
+		go run ./cmd/euler $(if $(EULER_CONFIG),-config $(EULER_CONFIG),)
+
+# 重启本地调试服务：停掉占用端口上的旧进程，再用当前代码重新启动。
+# 改完代码跑过测试后执行一次，避免手工界面还在用旧二进制。
+dev-restart:
+	@pid=$$(lsof -nP -iTCP:$(EULER_PORT) -sTCP:LISTEN -t 2>/dev/null | head -1); \
+	if [ -n "$$pid" ]; then echo "停止旧服务 (pid $$pid)"; kill "$$pid"; sleep 1; fi; \
+	if [ -z "$${LANGFUSE_SECRET_KEY:-}" ] && [ -f "$$HOME/.zprofile" ]; then \
+		set -a; . "$$HOME/.zprofile" >/dev/null 2>&1 || true; set +a; \
+	fi; \
+	EULER_DATABASE_URL='$(EULER_DATABASE_URL)' \
+		nohup go run ./cmd/euler $(if $(EULER_CONFIG),-config $(EULER_CONFIG),) \
+		> /tmp/euler-dev.log 2>&1 & \
+	for i in $$(seq 1 60); do \
+		if curl -sf -o /dev/null http://127.0.0.1:$(EULER_PORT)/health; then \
+			echo "服务已就绪 http://127.0.0.1:$(EULER_PORT)，日志 /tmp/euler-dev.log"; \
+			exit 0; \
+		fi; \
+		if grep -q "startup failed" /tmp/euler-dev.log 2>/dev/null; then \
+			echo "服务启动失败，日志：" >&2; tail -20 /tmp/euler-dev.log >&2; exit 1; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "服务启动超时，最近日志：" >&2; tail -20 /tmp/euler-dev.log >&2; exit 1
+
+# 前端有改动时使用：重新构建嵌入产物后再重启后端，避免 UI 仍是旧 dist。
+dev-reload: web-build dev-restart
+
+# 前后端一起重启：后端（8080）与 Vite 开发服务器（5173）。
+dev-restart-all: dev-restart dev-web-restart
+
+# 重启前端开发服务器（5173）：停掉旧进程后以固定端口重新启动。
+dev-web-restart:
+	@pid=$$(lsof -nP -iTCP:$(WEB_PORT) -sTCP:LISTEN -t 2>/dev/null | head -1); \
+	if [ -n "$$pid" ]; then echo "停止旧前端 (pid $$pid)"; kill "$$pid"; sleep 1; fi; \
+	nohup npm --prefix web run dev -- --port $(WEB_PORT) --strictPort \
+		> /tmp/euler-web.log 2>&1 & \
+	for i in $$(seq 1 60); do \
+		if curl -sf -o /dev/null http://127.0.0.1:$(WEB_PORT)/; then \
+			echo "前端已就绪 http://127.0.0.1:$(WEB_PORT)，日志 /tmp/euler-web.log"; \
+			exit 0; \
+		fi; \
+		if grep -q "EADDRINUSE" /tmp/euler-web.log 2>/dev/null; then \
+			echo "前端启动失败，端口被占用：" >&2; tail -10 /tmp/euler-web.log >&2; exit 1; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "前端启动超时，最近日志：" >&2; tail -20 /tmp/euler-web.log >&2; exit 1
+
+# 停止本地调试服务。
+dev-stop:
+	@pid=$$(lsof -nP -iTCP:$(EULER_PORT) -sTCP:LISTEN -t 2>/dev/null | head -1); \
+	if [ -n "$$pid" ]; then kill "$$pid" && echo "已停止 (pid $$pid)"; \
+	else echo "端口 $(EULER_PORT) 上没有运行中的服务"; fi
 
 dev-web:
 	npm --prefix web run dev

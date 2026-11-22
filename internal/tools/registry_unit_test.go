@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -119,17 +120,46 @@ type unitFiles struct {
 	content map[string][]byte
 }
 
-func (f *unitFiles) Read(_ context.Context, path string) ([]byte, error) {
+func (f *unitFiles) ReadLines(
+	_ context.Context, path string, offset, limit int,
+) (workspace.LinePage, error) {
 	data, ok := f.content[path]
 	if !ok {
-		return nil, workspace.ErrNotFound
+		return workspace.LinePage{}, workspace.ErrNotFound
 	}
-	return data, nil
+	if offset < 1 {
+		offset = 1
+	}
+	if limit <= 0 {
+		limit = 2000
+	}
+	lines := strings.Split(string(data), "\n")
+	if offset > len(lines) {
+		return workspace.LinePage{StartLine: offset}, nil
+	}
+	end := offset - 1 + limit
+	if end > len(lines) {
+		end = len(lines)
+	}
+	page := workspace.LinePage{
+		Content:   strings.Join(lines[offset-1:end], "\n"),
+		StartLine: offset,
+		EndLine:   end,
+		HasMore:   end < len(lines),
+	}
+	if page.HasMore {
+		page.NextOffset = end + 1
+	}
+	return page, nil
 }
 
-func (*unitFiles) ListDir(context.Context, string) ([]workspace.FileNode, error) { return nil, nil }
+func (*unitFiles) ListDir(context.Context, string, string, int) (workspace.NodePage, error) {
+	return workspace.NodePage{}, nil
+}
 
-func (*unitFiles) Search(context.Context, string) ([]string, error) { return nil, nil }
+func (*unitFiles) Search(context.Context, string, string, int) (workspace.SearchPage, error) {
+	return workspace.SearchPage{}, nil
+}
 
 func (f *unitFiles) PrepareWrite(
 	_ context.Context, path string, content []byte,
@@ -220,6 +250,28 @@ func TestRegistryReadsFileWithoutDatabase(t *testing.T) {
 	require.Equal(t, 1, counts.started)
 	require.Equal(t, 1, counts.succeeded)
 	require.Equal(t, []string{"tool.started", "tool.completed"}, events.eventTypes())
+}
+
+func TestRegistryReadPagesWithOffsetAndLimit(t *testing.T) {
+	recorder := newUnitRecorder()
+	events := &unitPublisher{}
+	registry := newUnitRegistry(recorder, events, &fakeGate{
+		decision: approval.Decision{Approved: true, Status: approval.StatusApproved},
+	}, 10)
+	content := "l1\nl2\nl3\nl4\nl5"
+	built, err := registry.Tools(
+		&unitFiles{content: map[string][]byte{"a.txt": []byte(content)}},
+		&unitExecutor{}, "/tmp/unit", nil,
+	)
+	require.NoError(t, err)
+	observation, err := invokeUnitTool(t, built, "file_read",
+		`{"path":"a.txt","offset":2,"limit":2}`)
+	require.NoError(t, err)
+	require.Contains(t, observation, "l2\\nl3")
+	require.Contains(t, observation, `"start_line":2`)
+	require.Contains(t, observation, `"end_line":3`)
+	require.Contains(t, observation, `"has_more":true`)
+	require.Contains(t, observation, `"next_offset":4`)
 }
 
 func TestRegistryRejectsSensitiveToolWithoutExecuting(t *testing.T) {

@@ -16,8 +16,6 @@ import (
 const (
 	// maxListNodes 限制单个工作区返回的文件树节点数。
 	maxListNodes = 1000
-	// maxSearchResults 限制相对路径搜索的匹配数量。
-	maxSearchResults = 200
 	// emptyCapacity 用于构建带预设长度上限的空切片。
 	emptyCapacity = 0
 	// typeDir 和 typeFile 是工作区文件树的节点类型。
@@ -106,16 +104,6 @@ func (s *FileStore) List(_ context.Context) ([]FileNode, error) {
 	return nodes, nil
 }
 
-// ListDir 返回工作区内 dir 的直接子项，不做递归；dir 为空或 "." 时
-// 列出工作区根目录。符号链接会被列出，但绝不跟进其目标。
-func (s *FileStore) ListDir(_ context.Context, dir string) ([]FileNode, error) {
-	resolved, err := s.resolveDirectory(dir)
-	if err != nil {
-		return nil, err
-	}
-	return s.readDirNodes(resolved)
-}
-
 // resolveDirectory 解析 dir，并要求其存在且是目录。
 func (s *FileStore) resolveDirectory(dir string) (string, error) {
 	requested := dir
@@ -140,30 +128,6 @@ func (s *FileStore) resolveDirectory(dir string) (string, error) {
 	return resolved, nil
 }
 
-// readDirNodes 读取目录的直接子项并转换为工作区相对路径节点。
-func (s *FileStore) readDirNodes(dir string) ([]FileNode, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, mapResolveError(err)
-	}
-	capacity := len(entries)
-	if capacity > maxListNodes {
-		capacity = maxListNodes
-	}
-	nodes := make([]FileNode, emptyCapacity, capacity)
-	for _, entry := range entries {
-		if len(nodes) >= maxListNodes {
-			break
-		}
-		node, nodeErr := s.dirNode(dir, entry)
-		if nodeErr != nil {
-			return nil, nodeErr
-		}
-		nodes = append(nodes, node)
-	}
-	return nodes, nil
-}
-
 // dirNode 以工作区根为基准构建子项节点，使返回路径可直接用于其他工具。
 func (s *FileStore) dirNode(dir string, entry fs.DirEntry) (FileNode, error) {
 	rel, err := filepath.Rel(s.inside, filepath.Join(dir, entry.Name()))
@@ -171,25 +135,6 @@ func (s *FileStore) dirNode(dir string, entry fs.DirEntry) (FileNode, error) {
 		return FileNode{}, fmt.Errorf("resolve workspace entry: %w", err)
 	}
 	return newFileNode(rel, entry)
-}
-
-// Search 返回最多 maxSearchResults 个包含 query 的相对路径。
-func (s *FileStore) Search(_ context.Context, query string) ([]string, error) {
-	matches := make([]string, emptyCapacity, maxSearchResults)
-	err := s.walk(func(rel string, _ fs.DirEntry) error {
-		if len(matches) < maxSearchResults && strings.Contains(rel, query) {
-			matches = append(matches, rel)
-		}
-		if len(matches) >= maxSearchResults {
-			return fs.SkipAll
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	slices.Sort(matches)
-	return matches, nil
 }
 
 // openReadFile 解析、校验并以只读方式打开 requested。调用方必须
