@@ -26,6 +26,7 @@ import (
 	"euler/internal/approval"
 	"euler/internal/config"
 	"euler/internal/event"
+	"euler/internal/persistence"
 	"euler/internal/run"
 	"euler/internal/tools"
 	"euler/internal/tracing"
@@ -362,8 +363,11 @@ func (r *recorder) Reject(_ context.Context, id uuid.UUID, _ string) error {
 	return nil
 }
 
-// UpdateContent 保存最新助手文本；流式写入会多次调用，最后一次即全文。
-func (r *recorder) UpdateContent(_ context.Context, _ uuid.UUID, content string) error {
+// UpdateMessage 保存最新助手文本；流式写入会多次调用，最后一次即全文。
+// 容器内一次性 agent 不落库片段，只需保留最终输出。
+func (r *recorder) UpdateMessage(
+	_ context.Context, _ uuid.UUID, content string, _ []persistence.Part,
+) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.content = content

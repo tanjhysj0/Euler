@@ -38,6 +38,45 @@ func (s *Service) UpdateModel(
 	return s.Get(ctx, id)
 }
 
+// UpdateWorkspace 将会话切换到另一个已存在的目录；历史 Run 与消息保持不变，
+// 后续 Run 与文件面板改用新目录。会话有进行中的 Run 时拒绝切换。
+func (s *Service) UpdateWorkspace(
+	ctx context.Context, id uuid.UUID, path string,
+) (SessionView, error) {
+	if path == emptyString {
+		return SessionView{}, fmt.Errorf("%w: workspace path is required", ErrInvalidInput)
+	}
+	normalized, err := s.workspaces.NormalizeExisting(path)
+	if err != nil {
+		return SessionView{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
+	}
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if txErr := requireSession(tx, id); txErr != nil {
+			return txErr
+		}
+		if txErr := ensureSessionIdle(tx, id); txErr != nil {
+			return txErr
+		}
+		if txErr := lockWorkspacePath(tx, normalized); txErr != nil {
+			return txErr
+		}
+		workspaceRow, txErr := lockOrCreateWorkspace(tx, normalized)
+		if txErr != nil {
+			return txErr
+		}
+		update := tx.Model(&persistence.Session{}).Where(idFilter, id).
+			Update("workspace_id", workspaceRow.ID)
+		if update.Error != nil {
+			return fmt.Errorf("update session workspace: %w", update.Error)
+		}
+		return nil
+	})
+	if err != nil {
+		return SessionView{}, err
+	}
+	return s.Get(ctx, id)
+}
+
 // Delete 删除会话及其全部 Run、消息与工具记录。工作区目录与共享工作区
 // 记录保留，避免误删用户文件。
 func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {

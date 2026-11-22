@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
@@ -177,6 +177,12 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     return ok(profiles)
   }
   if (url === '/api/v1/sessions/s1' && method === 'PATCH') {
+    if (body?.workspace_path) {
+      return ok({
+        ...session,
+        workspace: { ...session.workspace, path: body.workspace_path },
+      })
+    }
     const profile = profiles.find((item) => item.id === body?.model_profile_id) ?? profiles[0]
     return ok({
       ...session,
@@ -188,12 +194,27 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
       },
     })
   }
+  if (url.startsWith('/api/v1/fs/directories')) {
+    if (method === 'POST') {
+      return ok({ name: body?.name, path: `/Users/test/${body?.name}` })
+    }
+    const target = new URL(url, 'http://localhost').searchParams.get('path') ?? ''
+    if (target === '' || target === '/Users/test') {
+      return ok({
+        current_path: '/Users/test',
+        parent_path: '/Users',
+        directories: [{ name: 'project', path: '/Users/test/project' }],
+      })
+    }
+    const directories =
+      target === '/Users/test/project'
+        ? [{ name: 'nested', path: '/Users/test/project/nested' }]
+        : []
+    return ok({ current_path: target, parent_path: null, directories })
+  }
   if (url === '/api/v1/runs/r1' && method === 'GET') {
     runFetchCount += 1
     return ok(snapshot)
-  }
-  if (url === '/api/v1/runs/r0' && method === 'GET') {
-    return ok({ ...makeSnapshot('failed', 'r0'), tool_calls: [oldTool] })
   }
   if (url === '/api/v1/runs/r2' && method === 'GET') {
     return ok(makeSnapshot('succeeded', 'r2'))
@@ -236,12 +257,12 @@ beforeEach(() => {
   useRunStore.setState({
     deltas: {},
     reasoning: {},
+    timelineEvents: {},
     lastSeq: {},
     seenEventKeys: new Set<string>(),
     connection: null,
     activeBySession: {},
     drafts: {},
-    timelineCollapsed: false,
   })
   vi.stubGlobal('EventSource', FakeEventSource)
   vi.stubGlobal('fetch', fetchMock)
@@ -299,6 +320,103 @@ describe('ChatPanel', () => {
     expect(screen.getByText('退出码 0')).toBeVisible()
   })
 
+  it('收起 shell 工具时终端输出与详情一起隐藏', async () => {
+    const toolCall: ToolCallView = {
+      id: 'tc-shell',
+      run_id: 'r1',
+      name: 'shell',
+      arguments_json: { command: 'printf hello', dir: '/tmp/ws' },
+      status: 'succeeded',
+      result_json: { output: 'hello', exit_code: 0, timed_out: false, truncated: false },
+      created_at: '2026-11-18T10:00:00Z',
+    }
+    snapshot = { ...makeSnapshot('succeeded'), tool_calls: [toolCall] }
+    renderWithProviders(<ChatPanel session={session} />)
+    await waitFor(() => expect(document.querySelector('.terminal-block')).not.toBeNull())
+
+    await userEvent.click(screen.getByRole('button', { name: /执行命令/ }))
+    expect(document.querySelector('.terminal-block')).toBeNull()
+    expect(document.querySelector('.tool-details')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: /执行命令/ }))
+    expect(document.querySelector('.terminal-block')).not.toBeNull()
+  })
+
+  it('本轮工具执行过程渲染在最终回答之前，且可一键收起', async () => {
+    const toolCall: ToolCallView = {
+      id: 'tc-shell',
+      run_id: 'r1',
+      name: 'shell',
+      arguments_json: { command: 'printf hello', dir: '/tmp/ws' },
+      status: 'succeeded',
+      result_json: { output: 'hello', exit_code: 0, timed_out: false, truncated: false },
+      created_at: '2026-11-18T10:00:00Z',
+    }
+    messages = [userMessage, { ...streamingMessage, status: 'completed', content: '最终回答内容' }]
+    messages[1] = {
+      ...messages[1],
+      parts: [
+        { type: 'tool', tool_call_id: 'tc-shell' },
+        { type: 'text', text: '最终回答内容' },
+      ],
+      tool_calls: [toolCall],
+    }
+    snapshot = { ...makeSnapshot('succeeded'), tool_calls: [toolCall] }
+    renderWithProviders(<ChatPanel session={session} />)
+
+    const toolRow = await screen.findByRole('button', { name: /执行命令/ })
+    const answer = screen.getByText('最终回答内容')
+    // 工具过程在前、最终回答在后。
+    expect(
+      toolRow.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: '收起工具调用（1）' }))
+    expect(screen.queryByRole('button', { name: /执行命令/ })).not.toBeInTheDocument()
+    expect(screen.getByText('最终回答内容')).toBeVisible()
+
+    await userEvent.click(screen.getByRole('button', { name: '展开工具调用（1）' }))
+    expect(await screen.findByRole('button', { name: /执行命令/ })).toBeVisible()
+  })
+
+  it('终态消息按 parts 顺序交错渲染文本与工具', async () => {
+    const toolCall: ToolCallView = {
+      id: 'tc1',
+      run_id: 'r1',
+      name: 'shell',
+      arguments_json: { command: 'ls', dir: '/tmp/ws' },
+      status: 'succeeded',
+      result_json: { output: '', exit_code: 0, timed_out: false, truncated: false },
+      created_at: '2026-11-18T10:00:02Z',
+    }
+    messages = [
+      userMessage,
+      {
+        ...streamingMessage,
+        status: 'completed',
+        content: '我先检查目录。最终回答。',
+        parts: [
+          { type: 'text', text: '我先检查目录。' },
+          { type: 'tool', tool_call_id: 'tc1' },
+          { type: 'text', text: '最终回答。' },
+        ],
+        tool_calls: [toolCall],
+      },
+    ]
+    snapshot = { ...makeSnapshot('succeeded'), tool_calls: [toolCall] }
+    renderWithProviders(<ChatPanel session={session} />)
+
+    const firstText = await screen.findByText('我先检查目录。')
+    const toolRow = await screen.findByRole('button', { name: /执行命令/ })
+    const lastText = await screen.findByText('最终回答。')
+    expect(
+      firstText.compareDocumentPosition(toolRow) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(
+      toolRow.compareDocumentPosition(lastText) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
   it('Enter 发送消息并清空草稿', async () => {
     messages = [userMessage, { ...streamingMessage, status: 'completed', content: '回答完毕' }]
     // 消息已完成即上一轮 Run 结束，快照需返回终态，输入区才可发送。
@@ -351,6 +469,65 @@ describe('ChatPanel', () => {
       )
       expect(call?.body).toEqual({ model_profile_id: 'model-2' })
     })
+  })
+
+  it('默认从用户家目录开始并逐层选择工作目录', async () => {
+    messages = [userMessage, { ...streamingMessage, status: 'completed', content: '回答完毕' }]
+    snapshot = makeSnapshot('succeeded')
+    renderWithProviders(<ChatPanel session={session} />)
+    const trigger = await screen.findByRole('button', { name: '选择工作目录' })
+    expect(trigger).toHaveTextContent('ws')
+    expect(trigger).toHaveAttribute('title', '/tmp/ws')
+
+    await userEvent.click(trigger)
+    const dialog = await screen.findByRole('dialog')
+    // 未传 path 时后端返回用户主目录，作为默认浏览位置。
+    expect(await within(dialog).findByText('/Users/test')).toBeVisible()
+    expect(
+      calls.some((item) => item.url === '/api/v1/fs/directories' && item.method === 'GET'),
+    ).toBe(true)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'project' }))
+    expect(await screen.findByText('/Users/test/project')).toBeVisible()
+    await userEvent.click(within(dialog).getByRole('button', { name: '选择当前目录' }))
+
+    await waitFor(() => {
+      const call = calls.find(
+        (item) => item.url === '/api/v1/sessions/s1' && item.method === 'PATCH',
+      )
+      expect(call?.body).toEqual({ workspace_path: '/Users/test/project' })
+    })
+  })
+
+  it('可在选择器中新建目录并直接进入', async () => {
+    messages = [userMessage, { ...streamingMessage, status: 'completed', content: '回答完毕' }]
+    snapshot = makeSnapshot('succeeded')
+    renderWithProviders(<ChatPanel session={session} />)
+    await userEvent.click(await screen.findByRole('button', { name: '选择工作目录' }))
+    const dialog = await screen.findByRole('dialog')
+    await within(dialog).findByText('/Users/test')
+
+    await userEvent.click(within(dialog).getByRole('button', { name: '新建目录' }))
+    await userEvent.type(within(dialog).getByPlaceholderText('新目录名称'), 'demo')
+    await userEvent.click(within(dialog).getByRole('button', { name: '创建' }))
+
+    await waitFor(() => {
+      const call = calls.find(
+        (item) => item.url === '/api/v1/fs/directories' && item.method === 'POST',
+      )
+      expect(call?.body).toEqual({ parent_path: '/Users/test', name: 'demo' })
+    })
+    expect(await screen.findByText('/Users/test/demo')).toBeVisible()
+  })
+
+  it('取消工作目录选择不发送更新请求', async () => {
+    messages = [userMessage, { ...streamingMessage, status: 'completed', content: '回答完毕' }]
+    snapshot = makeSnapshot('succeeded')
+    renderWithProviders(<ChatPanel session={session} />)
+    await userEvent.click(await screen.findByRole('button', { name: '选择工作目录' }))
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+    expect(calls.some((item) => item.method === 'PATCH')).toBe(false)
   })
 
   it('刷新后已取消 Run 恢复状态标签与助手消息文本', async () => {
@@ -410,7 +587,7 @@ describe('ChatPanel', () => {
     renderWithProviders(<ChatPanel session={session} />)
     expect(await screen.findByText('连接中')).toBeVisible()
     const source = FakeEventSource.instances.at(-1)
-    expect(source?.url).toBe('/api/v1/runs/r1/events?after=5')
+    expect(source?.url).toBe('/api/v1/runs/r1/events?after=0')
     act(() => source?.emitOpen())
     expect(screen.getByText('已连接')).toBeVisible()
     act(() => source?.emitError())
@@ -572,6 +749,11 @@ describe('ChatPanel', () => {
         session_seq: 1,
         role: 'assistant',
         content: '第一次完成',
+        parts: [
+          { type: 'text', text: '第一次完成' },
+          { type: 'tool', tool_call_id: 'tc-old' },
+        ],
+        tool_calls: [oldTool],
         status: 'completed',
         created_at: '2026-11-18T09:59:01Z',
       },

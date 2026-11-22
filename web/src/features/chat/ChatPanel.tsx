@@ -10,16 +10,25 @@ import {
   useRunSnapshot,
   useStartRun,
   useUpdateSessionModel,
+  useUpdateSessionWorkspace,
 } from '../../api/queries'
 import type { ConnectionStatus } from '../../stores/run'
 import type { RunStatus, SessionView } from '../../api/types'
 import { useRunStore } from '../../stores/run'
 import MessageList from './MessageList'
-import ToolTimeline from './ToolTimeline'
+import PartsTimeline from './PartsTimeline'
+import RunTimeline from './RunTimeline'
 import { isTerminalStatus, useRunEvents } from './useRunEvents'
+import DirectoryPicker, { FolderIcon } from '../workspace/DirectoryPicker'
 
 interface ChatPanelProps {
   session: SessionView
+}
+
+// workspaceLabel 取目录的最后一级作为按钮文案，根目录直接显示 /。
+function workspaceLabel(path: string): string {
+  const parts = path.split('/').filter((part) => part !== '')
+  return parts.length === 0 ? '/' : parts[parts.length - 1]
 }
 
 const runStatusLabels: Record<RunStatus, string> = {
@@ -38,25 +47,7 @@ const connectionLabels: Record<ConnectionStatus, string> = {
   reconnecting: '重连中',
 }
 
-interface HistoricalRunToolsProps {
-  runId: string
-  onDecide: (approvalId: string, approved: boolean, reason: string) => Promise<void>
-}
-
-// HistoricalRunTools 按消息上的 run_id 加载历史 Run 快照，
-// 让每次对话的工具调用都留在各自消息下方，而不是只显示最后一次 Run。
-function HistoricalRunTools({ runId, onDecide }: HistoricalRunToolsProps) {
-  const snapshot = useRunSnapshot(runId).data
-  return (
-    <ToolTimeline
-      snapshot={snapshot}
-      onDecide={onDecide}
-      persistCollapse={false}
-    />
-  )
-}
-
-// ChatPanel 组合消息列表、工具时间线与输入区；权威数据来自 REST 快照，
+// ChatPanel 组合消息列表、对话时间线与输入区；权威数据来自 REST 快照，
 // SSE 增量只用于 streaming 展示。刷新恢复以最后一条带 run_id 的消息为准，
 // 终态 Run 也要恢复快照以展示工具时间线与错误信息。
 export default function ChatPanel({ session }: ChatPanelProps) {
@@ -91,8 +82,10 @@ export default function ChatPanel({ session }: ChatPanelProps) {
   const decide = useApprovalDecision(runId)
   const profilesQuery = useModelProfiles()
   const updateModel = useUpdateSessionModel(session.id)
+  const updateWorkspace = useUpdateSessionWorkspace(session.id)
   const [sendError, setSendError] = useState<string | null>(null)
   const [stopOpen, setStopOpen] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [showWorkspaceWarning, setShowWorkspaceWarning] = useState(false)
 
   // 模型列表可能尚未加载或缺少当前会话的配置，补一个当前项保证下拉框
@@ -140,6 +133,20 @@ export default function ChatPanel({ session }: ChatPanelProps) {
 
   async function onDecide(approvalId: string, approved: boolean, reason: string) {
     await decide.mutateAsync({ approvalId, approved, reason })
+  }
+
+  // 选择工作目录：目录未变化时直接关闭，否则更新会话并刷新文件树。
+  async function chooseWorkspace(path: string) {
+    if (path === session.workspace.path) {
+      setPickerOpen(false)
+      return
+    }
+    try {
+      await updateWorkspace.mutateAsync(path)
+      setPickerOpen(false)
+    } catch (err) {
+      message.error(err instanceof APIError ? err.message : '切换工作目录失败')
+    }
   }
 
   // 停止失败时保留弹窗并提示错误，允许用户重试；成功才关闭。
@@ -192,14 +199,27 @@ export default function ChatPanel({ session }: ChatPanelProps) {
             messages={messages}
             deltas={deltas}
             reasoning={reasoning}
-            renderRunTools={(id) =>
-              id === runId ? null : (
-                <HistoricalRunTools runId={id} onDecide={onDecide} />
+            renderAssistant={(message) => {
+              if (!message.run_id) {
+                return undefined
+              }
+              // 进行中的 Run 用 SSE 实时还原；终态消息以落库 parts 为唯一来源。
+              if (message.status !== 'streaming') {
+                return <PartsTimeline message={message} />
+              }
+              return (
+                <RunTimeline
+                  runId={message.run_id}
+                  messageId={message.id}
+                  fallbackContent={message.content}
+                  streaming
+                  snapshot={message.run_id === runId ? snapshot : undefined}
+                  onDecide={onDecide}
+                />
               )
-            }
+            }}
           />
         )}
-        <ToolTimeline snapshot={snapshot} onDecide={onDecide} />
       </div>
       <div className="composer">
         <Input.TextArea
@@ -215,18 +235,32 @@ export default function ChatPanel({ session }: ChatPanelProps) {
           }}
         />
         <div className="composer-actions">
-          <Select
-            className="composer-model"
-            size="small"
-            variant="borderless"
-            aria-label="当前模型"
-            value={session.model.id}
-            options={modelOptions}
-            loading={profilesQuery.isPending}
-            disabled={active || updateModel.isPending}
-            popupMatchSelectWidth={false}
-            onChange={(profileId: string) => void changeModel(profileId)}
-          />
+          <div className="composer-left">
+            <Button
+              className="composer-workspace"
+              size="small"
+              type="text"
+              icon={<FolderIcon />}
+              title={session.workspace.path}
+              aria-label="选择工作目录"
+              disabled={active || updateWorkspace.isPending}
+              onClick={() => setPickerOpen(true)}
+            >
+              {workspaceLabel(session.workspace.path)}
+            </Button>
+            <Select
+              className="composer-model"
+              size="small"
+              variant="borderless"
+              aria-label="当前模型"
+              value={session.model.id}
+              options={modelOptions}
+              loading={profilesQuery.isPending}
+              disabled={active || updateModel.isPending}
+              popupMatchSelectWidth={false}
+              onChange={(profileId: string) => void changeModel(profileId)}
+            />
+          </div>
           {active ? (
             <Button danger autoInsertSpace={false} onClick={() => setStopOpen(true)}>
               停止
@@ -253,6 +287,13 @@ export default function ChatPanel({ session }: ChatPanelProps) {
           void stopRun()
         }}
         onCancel={() => setStopOpen(false)}
+      />
+      <DirectoryPicker
+        open={pickerOpen}
+        initialPath=""
+        confirmLoading={updateWorkspace.isPending}
+        onCancel={() => setPickerOpen(false)}
+        onSelect={chooseWorkspace}
       />
     </div>
   )

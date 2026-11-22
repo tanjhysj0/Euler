@@ -7,6 +7,7 @@ import type {
   CreateSessionInput,
   CreateSessionResult,
   DeleteModelProfileResult,
+  DirectoryListing,
   FileNode,
   ListModelsInput,
   MessagePage,
@@ -17,6 +18,7 @@ import type {
   SessionView,
   StartRunResult,
   UpdateModelProfileInput,
+  WorkspaceDirectory,
 } from './types'
 
 export interface SessionListFilter {
@@ -80,6 +82,55 @@ export function useUpdateSessionModel(sessionId: string) {
     onSuccess: (session) => {
       queryClient.setQueryData(['sessions', 'detail', sessionId], session)
       void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+    },
+  })
+}
+
+// useDirectoryListing 逐层浏览本机目录，path 为空时后端回退到用户主目录。
+export function useDirectoryListing(path: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ['fs', 'directories', path ?? ''],
+    queryFn: () => {
+      const query = path ? `?path=${encodeURIComponent(path)}` : ''
+      return apiFetch<DirectoryListing>(`/fs/directories${query}`)
+    },
+    enabled,
+    // 目录内容变化频繁，弹窗重新打开时需要拿到最新结果。
+    staleTime: 0,
+  })
+}
+
+// useCreateDirectory 在指定父目录下创建一个单层子目录，成功后刷新该目录列表。
+export function useCreateDirectory() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ parentPath, name }: { parentPath: string; name: string }) =>
+      apiFetch<WorkspaceDirectory>('/fs/directories', {
+        method: 'POST',
+        body: JSON.stringify({ parent_path: parentPath, name }),
+      }),
+    onSuccess: (_directory, variables) => {
+      void queryClient.invalidateQueries({
+        queryKey: ['fs', 'directories', variables.parentPath],
+      })
+    },
+  })
+}
+
+// useUpdateSessionWorkspace 切换会话的工作目录；历史消息保持不变，
+// 后续 Run 与文件树使用新目录。
+export function useUpdateSessionWorkspace(sessionId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (workspacePath: string) =>
+      apiFetch<SessionView>(`/sessions/${sessionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ workspace_path: workspacePath }),
+      }),
+    onSuccess: (session) => {
+      queryClient.setQueryData(['sessions', 'detail', sessionId], session)
+      void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+      void queryClient.invalidateQueries({ queryKey: ['files'] })
     },
   })
 }

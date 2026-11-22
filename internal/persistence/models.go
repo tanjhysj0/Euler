@@ -65,15 +65,17 @@ func (Run) TableName() string { return "runs" }
 
 // Message 是用户可见的对话消息，带有会话级序号。
 type Message struct {
-	ID          uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
-	SessionID   uuid.UUID  `gorm:"type:uuid;not null" json:"session_id"`
-	RunID       *uuid.UUID `gorm:"type:uuid" json:"run_id"`
-	SessionSeq  int64      `gorm:"not null" json:"session_seq"`
-	Role        string     `gorm:"not null" json:"role"`
-	Content     string     `gorm:"not null;default:''" json:"content"`
-	Status      string     `gorm:"not null" json:"status"`
-	CreatedAt   time.Time  `gorm:"not null;default:now()" json:"created_at"`
-	CompletedAt *time.Time `gorm:"column:completed_at" json:"completed_at"`
+	ID         uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	SessionID  uuid.UUID  `gorm:"type:uuid;not null" json:"session_id"`
+	RunID      *uuid.UUID `gorm:"type:uuid" json:"run_id"`
+	SessionSeq int64      `gorm:"not null" json:"session_seq"`
+	Role       string     `gorm:"not null" json:"role"`
+	Content    string     `gorm:"not null;default:''" json:"content"`
+	// Parts 是按发生顺序保存的文本、思考与工具片段。
+	Parts       datatypes.JSON `gorm:"type:jsonb;not null;default:'[]'" json:"parts"`
+	Status      string         `gorm:"not null" json:"status"`
+	CreatedAt   time.Time      `gorm:"not null;default:now()" json:"created_at"`
+	CompletedAt *time.Time     `gorm:"column:completed_at" json:"completed_at"`
 }
 
 // TableName 将 Message 映射到其数据库表。

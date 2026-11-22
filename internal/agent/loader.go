@@ -151,19 +151,23 @@ func displayMessage(message persistence.Message) *schema.Message {
 	return schema.UserMessage(message.Content)
 }
 
-// gormMessageRecorder 把流式助手消息内容写回数据库。
+// gormMessageRecorder 把流式助手消息的正文与片段写回数据库。
 type gormMessageRecorder struct {
 	db *gorm.DB
 }
 
-// UpdateContent 更新指定消息的内容。
-func (r gormMessageRecorder) UpdateContent(
-	ctx context.Context, messageID uuid.UUID, content string,
+// UpdateMessage 同时更新指定消息的正文与有序片段。
+func (r gormMessageRecorder) UpdateMessage(
+	ctx context.Context, messageID uuid.UUID, content string, parts []persistence.Part,
 ) error {
+	updates := map[string]any{
+		"content": content,
+		"parts":   persistence.MarshalParts(parts),
+	}
 	err := r.db.WithContext(ctx).Model(&persistence.Message{}).
-		Where("id = ?", messageID).Update("content", content).Error
+		Where("id = ?", messageID).Updates(updates).Error
 	if err != nil {
-		return fmt.Errorf("update message content: %w", err)
+		return fmt.Errorf("update message: %w", err)
 	}
 	return nil
 }

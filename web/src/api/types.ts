@@ -79,12 +79,21 @@ export interface CreateSessionResult extends SessionView {
   workspace_warning: boolean
 }
 
+// MessagePart 是消息 parts 中的一个有序片段：正文、思考或工具调用。
+// 工具片段只保存 tool_calls 的标识，详情由消息携带的 tool_calls 补齐。
+export type MessagePart =
+  | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string }
+  | { type: 'tool'; tool_call_id: string }
+
 export interface MessageView {
   id: string
   run_id?: string | null
   session_seq: number
   role: string
   content: string
+  parts?: MessagePart[]
+  tool_calls?: ToolCallView[]
   status: string
   created_at: string
   completed_at?: string | null
@@ -101,6 +110,19 @@ export interface FileNode {
   type: 'dir' | 'file'
   size: number
   mod_time: string
+}
+
+// WorkspaceDirectory / DirectoryListing 对应后端 workspace.Directory / Listing，
+// 用于逐层浏览本机目录。
+export interface WorkspaceDirectory {
+  name: string
+  path: string
+}
+
+export interface DirectoryListing {
+  current_path: string
+  parent_path: string | null
+  directories: WorkspaceDirectory[]
 }
 
 export interface APIErrorBody {

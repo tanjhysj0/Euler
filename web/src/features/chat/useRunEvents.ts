@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import type { RunEvent, RunSnapshot, RunStatus } from '../../api/types'
 import { useRunStore } from '../../stores/run'
 
@@ -10,9 +10,9 @@ export function isTerminalStatus(status: RunStatus): boolean {
   return terminalStatuses.has(status)
 }
 
-// useRunEvents 从快照的 last_event_seq 建立 SSE 连接；EventSource 自动重连时
-// 浏览器携带 Last-Event-ID，服务端同时按 after 参数回放。事件先按 run_id+seq
-// 去重，再按类型更新增量或失效权威查询；终态关闭连接并清空本地增量。
+// useRunEvents 建立到当前 Run 的 SSE 连接。连接时从 seq 0 开始，让服务端
+// 回放全部持久化事件，因此刷新后也能按真实顺序重建进行中的对话时间线；
+// 事件按 run_id+seq 去重，终态关闭连接并清空本地增量。
 export function useRunEvents(snapshot: RunSnapshot | undefined) {
   const queryClient = useQueryClient()
   const run = snapshot?.run
@@ -20,20 +20,13 @@ export function useRunEvents(snapshot: RunSnapshot | undefined) {
   const sessionId = run?.session_id
   const active = run !== undefined && !terminalStatuses.has(run.status)
 
-  // 起始 seq 随快照同步到 ref；主 effect 只依赖 runId/active，快照刷新
-  // 不会触发重连，重连时仍从最新 seq 之后回放。
-  const seqRef = useRef(0)
-  useEffect(() => {
-    seqRef.current = snapshot?.last_event_seq ?? 0
-  }, [snapshot])
-
   useEffect(() => {
     if (!active || runId === undefined || sessionId === undefined) {
       return
     }
     useRunStore.getState().setActive(sessionId, runId)
     useRunStore.getState().setConnection('connecting')
-    const source = new EventSource(`/api/v1/runs/${runId}/events?after=${seqRef.current}`)
+    const source = new EventSource(`/api/v1/runs/${runId}/events?after=0`)
     let closed = false
 
     source.onopen = () => {

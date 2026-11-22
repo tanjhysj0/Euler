@@ -16,6 +16,7 @@ import (
 	"euler/internal/approval"
 	"euler/internal/config"
 	"euler/internal/event"
+	"euler/internal/persistence"
 	"euler/internal/run"
 	"euler/internal/tools"
 	"euler/internal/tracing"
@@ -36,10 +37,12 @@ type ChatModelFactory interface {
 	New(ctx context.Context, spec ModelSpec) (model.ToolCallingChatModel, error)
 }
 
-// MessageRecorder 持久化流式助手消息内容。生产实现写入数据库，
+// MessageRecorder 持久化流式助手消息的正文与有序片段。生产实现写入数据库，
 // 测试可以注入内存实现。
 type MessageRecorder interface {
-	UpdateContent(ctx context.Context, messageID uuid.UUID, content string) error
+	UpdateMessage(
+		ctx context.Context, messageID uuid.UUID, content string, parts []persistence.Part,
+	) error
 }
 
 // RunInput 是 Runtime 执行一次 run 所需的全部已装载输入。
@@ -282,7 +285,7 @@ func (rt *Runtime) buildAgent(
 	}
 	limited := newRoundLimitedModel(
 		newRetryModel(base, input.Model.APIKey), rt.deps.Limits.MaxModelRounds)
-	built, err := rt.buildTools(input)
+	built, err := rt.buildTools(input, writer)
 	if err != nil {
 		return nil, err
 	}

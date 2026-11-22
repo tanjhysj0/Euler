@@ -10,7 +10,23 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"euler/internal/event"
+	"euler/internal/persistence"
+	"euler/internal/run"
 )
+
+// partsRecorder 记录最近一次落盘的正文与片段。
+type partsRecorder struct {
+	content string
+	parts   []persistence.Part
+}
+
+func (r *partsRecorder) UpdateMessage(
+	_ context.Context, _ uuid.UUID, content string, parts []persistence.Part,
+) error {
+	r.content = content
+	r.parts = parts
+	return nil
+}
 
 // recordingSink 记录检查器写出的助手文本与思考过程。
 type recordingSink struct{ text, reasoning string }
@@ -50,7 +66,11 @@ func (*recordingPublisher) Subscribe(uuid.UUID) (<-chan event.Event, func()) {
 // noopRecorder 忽略正文落库，测试只关注思考事件的发送时机。
 type noopRecorder struct{}
 
-func (noopRecorder) UpdateContent(context.Context, uuid.UUID, string) error { return nil }
+func (noopRecorder) UpdateMessage(
+	context.Context, uuid.UUID, string, []persistence.Part,
+) error {
+	return nil
+}
 
 // TestDeltaWriterStreamsReasoningInBatches 验证思考过程边生成边发送：
 // 未满批次不发送，满批次立即发送，末尾不足一批在 flush 时补发。
@@ -70,6 +90,30 @@ func TestDeltaWriterStreamsReasoningInBatches(t *testing.T) {
 	require.NoError(t, writer.addReasoning(context.Background(), "收尾"))
 	require.NoError(t, writer.flush(context.Background()))
 	require.Equal(t, []string{"message.reasoning", "message.reasoning"}, publisher.types)
+}
+
+// TestDeltaWriterRecordsPartsInOrder 验证思考、文本与工具调用按发生顺序
+// 写入片段，且同类连续增量合并为一个片段。
+func TestDeltaWriterRecordsPartsInOrder(t *testing.T) {
+	recorder := &partsRecorder{}
+	writer := newDeltaWriter(&recordingPublisher{}, run.Request{
+		RunID: uuid.New(), AssistantMessageID: uuid.New(),
+	}, recorder, "")
+	ctx := context.Background()
+	require.NoError(t, writer.addReasoning(ctx, "先想"))
+	require.NoError(t, writer.add(ctx, "先看"))
+	require.NoError(t, writer.add(ctx, "目录"))
+	toolID := uuid.New()
+	require.NoError(t, writer.AppendToolPart(ctx, toolID))
+	require.NoError(t, writer.add(ctx, "最终回答"))
+	require.NoError(t, writer.flush(ctx))
+	require.Equal(t, "先看目录最终回答", recorder.content)
+	require.Equal(t, []persistence.Part{
+		{Type: persistence.PartTypeReasoning, Text: "先想"},
+		{Type: persistence.PartTypeText, Text: "先看目录"},
+		{Type: persistence.PartTypeTool, ToolCallID: toolID.String()},
+		{Type: persistence.PartTypeText, Text: "最终回答"},
+	}, recorder.parts)
 }
 
 // TestStreamHasToolCallsAfterText 要求先输出文本、后输出工具调用的流仍被

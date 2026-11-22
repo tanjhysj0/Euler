@@ -293,6 +293,47 @@ func TestMessagesPagesBySessionSequence(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
+// UpdateWorkspace 切换到已存在的目录，并复用同一路径的工作区记录。
+func TestUpdateSessionWorkspaceSwitchesDirectory(t *testing.T) {
+	svc, _ := newSessionServiceForTest(t)
+	created, err := svc.Create(context.Background(), CreateInput{ProfileID: testProfileID})
+	require.NoError(t, err)
+	target := t.TempDir()
+	normalized, err := svc.workspaces.NormalizeExisting(target)
+	require.NoError(t, err)
+	updated, err := svc.UpdateWorkspace(context.Background(), created.ID, target)
+	require.NoError(t, err)
+	require.Equal(t, normalized, updated.Workspace.Path)
+	require.NotEqual(t, created.Workspace.ID, updated.Workspace.ID)
+	again, err := svc.UpdateWorkspace(context.Background(), created.ID, target)
+	require.NoError(t, err)
+	require.Equal(t, updated.Workspace.ID, again.Workspace.ID)
+}
+
+// 会话有进行中的 Run 时不允许切换工作目录。
+func TestUpdateSessionWorkspaceRejectsActiveRun(t *testing.T) {
+	svc, db, _ := newSessionServiceWithRoot(t)
+	created, err := svc.Create(context.Background(), CreateInput{ProfileID: testProfileID})
+	require.NoError(t, err)
+	run := persistence.Run{
+		ID: uuid.New(), SessionID: created.ID, Status: "running", NextEventSeq: 1,
+	}
+	require.NoError(t, db.Create(&run).Error)
+	_, err = svc.UpdateWorkspace(context.Background(), created.ID, t.TempDir())
+	require.ErrorIs(t, err, ErrSessionHasActiveRun)
+}
+
+// 拒绝相对路径与不存在的会话。
+func TestUpdateSessionWorkspaceRejectsInvalidInput(t *testing.T) {
+	svc, _ := newSessionServiceForTest(t)
+	created, err := svc.Create(context.Background(), CreateInput{ProfileID: testProfileID})
+	require.NoError(t, err)
+	_, err = svc.UpdateWorkspace(context.Background(), created.ID, "relative/dir")
+	require.ErrorIs(t, err, ErrInvalidInput)
+	_, err = svc.UpdateWorkspace(context.Background(), uuid.New(), t.TempDir())
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
 func newSessionServiceForTest(t *testing.T) (*Service, *gorm.DB) {
 	t.Helper()
 	svc, db, _ := newSessionServiceWithRoot(t)

@@ -1,30 +1,17 @@
 import { Empty } from 'antd'
+import { Fragment } from 'react'
 import type { ReactNode } from 'react'
 import type { MessageView } from '../../api/types'
 import MarkdownView from '../../components/MarkdownView'
+import { mergeStreamingText } from './timeline'
 
 interface MessageListProps {
   messages: MessageView[]
   deltas: Record<string, string>
   reasoning: Record<string, string>
-  // renderRunTools 在助手消息下渲染该 Run 的工具时间线，
-  // 避免后续 Run 覆盖后历史工具调用消失。
-  renderRunTools?: (runId: string) => ReactNode
-}
-
-// mergeStreamingText 合并权威 content 与本地增量：服务端先写库后发 delta，
-// content 正常已包含全部增量文本。取 content 后缀与 delta 前缀的最长重叠去重；
-// content 落后于本地增量时只去掉重叠部分，无重叠则全量保留，避免重复或丢字。
-function mergeStreamingText(content: string, delta: string): string {
-  if (delta === '') {
-    return content
-  }
-  for (let k = Math.min(content.length, delta.length); k > 0; k -= 1) {
-    if (content.endsWith(delta.slice(0, k))) {
-      return content + delta.slice(k)
-    }
-  }
-  return content + delta
+  // renderAssistant 允许调用方按 Run 事件顺序完整接管助手消息渲染；
+  // 返回 undefined 时回退到默认的文本渲染。
+  renderAssistant?: (message: MessageView) => ReactNode
 }
 
 // MessageList 渲染消息 content（streaming 时拼接本地增量）与模型思考过程；
@@ -33,7 +20,7 @@ export default function MessageList({
   messages,
   deltas,
   reasoning,
-  renderRunTools,
+  renderAssistant,
 }: MessageListProps) {
   if (messages.length === 0) {
     return <Empty description="暂无消息" />
@@ -41,6 +28,10 @@ export default function MessageList({
   return (
     <div className="message-list">
       {messages.map((message) => {
+        const custom = message.role !== 'user' ? renderAssistant?.(message) : undefined
+        if (custom !== undefined) {
+          return <Fragment key={message.id}>{custom}</Fragment>
+        }
         const content =
           message.status === 'streaming'
             ? mergeStreamingText(message.content, deltas[message.id] ?? '')
@@ -63,7 +54,6 @@ export default function MessageList({
               </details>
             )}
             <MarkdownView content={content} />
-            {message.role !== 'user' && message.run_id && renderRunTools?.(message.run_id)}
           </div>
         )
       })}

@@ -1,19 +1,8 @@
-import { Button } from 'antd'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { RunSnapshot, ToolCallStatus, ToolCallView } from '../../api/types'
-import { useRunStore } from '../../stores/run'
+import type { ToolCallStatus, ToolCallView } from '../../api/types'
 import MarkdownView from '../../components/MarkdownView'
 import TerminalBlock from '../../components/TerminalBlock'
-import ApprovalCard from './ApprovalCard'
-
-interface ToolTimelineProps {
-  snapshot: RunSnapshot | undefined
-  onDecide: (approvalId: string, approved: boolean, reason: string) => Promise<void>
-  // persistCollapse 为 false 时使用组件内部折叠状态，
-  // 让多条历史 Run 的时间线可以独立展开/收起。
-  persistCollapse?: boolean
-}
 
 const statusLabels: Record<ToolCallStatus, { label: string; tone: string }> = {
   pending: { label: '等待中', tone: 'default' },
@@ -307,8 +296,9 @@ interface ToolRowProps {
 
 // ToolRow 默认只展示自然语言动作与状态；点击行展开可读详情，
 // 详情底部再折叠完整原始参数，避免默认暴露 JSON。
-function ToolRow({ tool }: ToolRowProps) {
-  const [open, setOpen] = useState(false)
+// shell 工具默认展开终端，收起时终端输出与详情一起隐藏。
+export function ToolRow({ tool }: ToolRowProps) {
+  const [open, setOpen] = useState(tool.name === 'shell')
   // 后端新增状态时兜底展示原始值，避免整条时间线崩溃。
   const status = statusLabels[tool.status] ?? { label: tool.status, tone: 'default' }
   const description = describeTool(tool)
@@ -351,7 +341,7 @@ function ToolRow({ tool }: ToolRowProps) {
           )}
         </div>
       )}
-      {shell && (
+      {open && shell && (
         <TerminalBlock
           command={shell.command}
           output={shell.output}
@@ -371,45 +361,3 @@ function ToolRow({ tool }: ToolRowProps) {
   )
 }
 
-// ToolTimeline 展示审批与工具调用；整体可收起，单条工具可展开详情。
-export default function ToolTimeline({
-  snapshot,
-  onDecide,
-  persistCollapse = true,
-}: ToolTimelineProps) {
-  const storedCollapsed = useRunStore((state) => state.timelineCollapsed)
-  const setStoredCollapsed = useRunStore((state) => state.setTimelineCollapsed)
-  const [localCollapsed, setLocalCollapsed] = useState(false)
-  const collapsed = persistCollapse ? storedCollapsed : localCollapsed
-  const setCollapsed = persistCollapse ? setStoredCollapsed : setLocalCollapsed
-  if (!snapshot || (snapshot.tool_calls.length === 0 && snapshot.approvals.length === 0)) {
-    return null
-  }
-  const pendingApprovals = snapshot.approvals.filter((approval) => approval.status === 'pending')
-  return (
-    <div className="tool-timeline">
-      <Button
-        size="small"
-        className="timeline-toggle"
-        onClick={() => setCollapsed(!collapsed)}
-      >
-        {collapsed ? '展开工具时间线' : '收起工具时间线'}
-      </Button>
-      {!collapsed && (
-        <>
-          {pendingApprovals.map((approval) => (
-            <ApprovalCard
-              key={approval.id}
-              approval={approval}
-              name={snapshot.tool_calls.find((tool) => tool.id === approval.tool_call_id)?.name}
-              onDecide={onDecide}
-            />
-          ))}
-          {snapshot.tool_calls.map((tool) => (
-            <ToolRow key={tool.id} tool={tool} />
-          ))}
-        </>
-      )}
-    </div>
-  )
-}

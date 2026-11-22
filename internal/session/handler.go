@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"euler/internal/api"
+	"euler/internal/persistence"
 	"euler/internal/workspace"
 )
 
@@ -56,16 +57,18 @@ type CreateResult struct {
 	WorkspaceWarning bool `json:"workspace_warning"`
 }
 
-// MessageView 是按会话序号排列的一条消息。
+// MessageView 是按会话序号排列的一条消息，parts 保存真实对话顺序。
 type MessageView struct {
-	ID          uuid.UUID  `json:"id"`
-	RunID       *uuid.UUID `json:"run_id,omitempty"`
-	SessionSeq  int64      `json:"session_seq"`
-	Role        string     `json:"role"`
-	Content     string     `json:"content"`
-	Status      string     `json:"status"`
-	CreatedAt   time.Time  `json:"created_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	ID          uuid.UUID              `json:"id"`
+	RunID       *uuid.UUID             `json:"run_id,omitempty"`
+	SessionSeq  int64                  `json:"session_seq"`
+	Role        string                 `json:"role"`
+	Content     string                 `json:"content"`
+	Parts       []persistence.Part     `json:"parts"`
+	ToolCalls   []persistence.ToolCall `json:"tool_calls,omitempty"`
+	Status      string                 `json:"status"`
+	CreatedAt   time.Time              `json:"created_at"`
+	CompletedAt *time.Time             `json:"completed_at,omitempty"`
 }
 
 // MessagePage 是一页消息及下一页的游标。
@@ -99,8 +102,10 @@ type createSessionRequest struct {
 	Path      string    `json:"path"`
 }
 
+// updateSessionRequest 支持切换模型或工作目录，二者必须且只能提供一个。
 type updateSessionRequest struct {
 	ModelProfileID uuid.UUID `json:"model_profile_id"`
+	WorkspacePath  string    `json:"workspace_path"`
 }
 
 func (h *Handler) create(c *gin.Context) {
@@ -158,7 +163,20 @@ func (h *Handler) update(c *gin.Context) {
 		api.AbortWithError(c, http.StatusBadRequest, codeInvalidRequest, "请求体不是合法的 JSON")
 		return
 	}
-	view, err := h.service.UpdateModel(c.Request.Context(), id, request.ModelProfileID)
+	hasModel := request.ModelProfileID != uuid.Nil
+	hasPath := request.WorkspacePath != ""
+	if hasModel == hasPath {
+		api.AbortWithError(c, http.StatusBadRequest, codeInvalidRequest,
+			"model_profile_id 与 workspace_path 必须且只能提供一个")
+		return
+	}
+	var view SessionView
+	var err error
+	if hasPath {
+		view, err = h.service.UpdateWorkspace(c.Request.Context(), id, request.WorkspacePath)
+	} else {
+		view, err = h.service.UpdateModel(c.Request.Context(), id, request.ModelProfileID)
+	}
 	if err != nil {
 		abortSessionError(c, err, "更新会话失败")
 		return

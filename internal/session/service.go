@@ -18,12 +18,9 @@ import (
 
 const (
 	statusActive        = "active"
-	defaultMessageLimit = 100
-	maxMessageLimit     = 200
 	defaultSessionTitle = "新会话"
 	emptyString         = ""
 	emptyLength         = 0
-	seqCursorOffset     = 1
 	idFilter            = "id = ?"
 )
 
@@ -121,37 +118,6 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]SessionView, e
 		views[i] = row.toView()
 	}
 	return views, nil
-}
-
-// Messages 返回按会话序号排序的一页消息。
-func (s *Service) Messages(
-	ctx context.Context, id uuid.UUID, after int64, limit int,
-) (MessagePage, error) {
-	if err := s.ensureSession(ctx, id); err != nil {
-		return MessagePage{}, err
-	}
-	if after < emptyLength {
-		after = emptyLength
-	}
-	limit = normalizeLimit(limit)
-	var rows []persistence.Message
-	err := s.db.WithContext(ctx).
-		Where("session_id = ? AND session_seq > ?", id, after).
-		Order("session_seq ASC").
-		Limit(limit + 1).
-		Find(&rows).Error
-	if err != nil {
-		return MessagePage{}, fmt.Errorf("list messages: %w", err)
-	}
-	page := MessagePage{Messages: make([]MessageView, emptyLength, len(rows))}
-	if len(rows) > limit {
-		rows = rows[:limit]
-		page.NextAfter = rows[limit-seqCursorOffset].SessionSeq
-	}
-	for _, row := range rows {
-		page.Messages = append(page.Messages, toMessageView(row))
-	}
-	return page, nil
 }
 
 func (s *Service) preparePath(sessionID uuid.UUID, path string) (string, bool, error) {
@@ -379,33 +345,10 @@ func toSessionView(
 	}.toView()
 }
 
-func toMessageView(row persistence.Message) MessageView {
-	return MessageView{
-		ID:          row.ID,
-		RunID:       row.RunID,
-		SessionSeq:  row.SessionSeq,
-		Role:        row.Role,
-		Content:     row.Content,
-		Status:      row.Status,
-		CreatedAt:   row.CreatedAt,
-		CompletedAt: row.CompletedAt,
-	}
-}
-
 func defaultTitle(path string) string {
 	base := filepath.Base(path)
 	if base == "." || base == string(filepath.Separator) || base == ".." {
 		return defaultSessionTitle
 	}
 	return base
-}
-
-func normalizeLimit(limit int) int {
-	if limit <= emptyLength {
-		return defaultMessageLimit
-	}
-	if limit > maxMessageLimit {
-		return maxMessageLimit
-	}
-	return limit
 }

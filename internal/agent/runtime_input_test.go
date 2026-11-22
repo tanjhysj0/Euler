@@ -15,6 +15,7 @@ import (
 	"euler/internal/approval"
 	"euler/internal/config"
 	"euler/internal/event"
+	"euler/internal/persistence"
 	"euler/internal/run"
 	"euler/internal/tools"
 	"euler/internal/tracing"
@@ -53,8 +54,8 @@ type inputMessages struct {
 	content string
 }
 
-func (m *inputMessages) UpdateContent(
-	_ context.Context, _ uuid.UUID, content string,
+func (m *inputMessages) UpdateMessage(
+	_ context.Context, _ uuid.UUID, content string, _ []persistence.Part,
 ) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

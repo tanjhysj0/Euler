@@ -60,11 +60,17 @@ const (
 	observationCompleted = "completed"
 )
 
+// PartRecorder 把工具调用按发生顺序追加到助手消息片段中。
+type PartRecorder interface {
+	AppendToolPart(ctx context.Context, toolCallID uuid.UUID) error
+}
+
 // RegistryDeps 携带每次工具调用所需的、按运行划分的依赖。
 type RegistryDeps struct {
 	Calls          CallRecorder
 	Events         event.Publisher
 	Gate           approval.Gate
+	Parts          PartRecorder
 	RunID          uuid.UUID
 	MaxToolCalls   int
 	MaxOutputBytes int
@@ -137,6 +143,9 @@ func (r *Registry) invoke(ctx context.Context, call toolInvocation) (string, err
 		Name:          call.name,
 		ArgumentsJSON: []byte(argsJSON),
 	}); err != nil {
+		return emptyObservation, err
+	}
+	if err := r.recordPart(ctx, rowID); err != nil {
 		return emptyObservation, err
 	}
 	used := r.calls.Add(singleToolCall)
@@ -252,6 +261,17 @@ func (r *Registry) failCall(ctx context.Context, callID uuid.UUID, cause error) 
 func (r *Registry) appendEvent(ctx context.Context, eventType string, payload any) error {
 	if _, err := r.deps.Events.Append(ctx, r.deps.RunID, eventType, payload); err != nil {
 		return fmt.Errorf("append %s event: %w", eventType, err)
+	}
+	return nil
+}
+
+// recordPart 在不配置片段记录器时静默跳过，便于只测试工具行为的场景。
+func (r *Registry) recordPart(ctx context.Context, callID uuid.UUID) error {
+	if r.deps.Parts == nil {
+		return nil
+	}
+	if err := r.deps.Parts.AppendToolPart(ctx, callID); err != nil {
+		return fmt.Errorf("append tool part: %w", err)
 	}
 	return nil
 }

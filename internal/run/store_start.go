@@ -113,11 +113,13 @@ func insertRunAndMessages(
 	user := persistence.Message{
 		ID: uuid.New(), SessionID: sessionID, RunID: &runID, SessionSeq: seq,
 		Role: "user", Content: content, Status: messageCompleted,
+		Parts:     persistence.MarshalParts(persistence.TextParts(content)),
 		CreatedAt: now, CompletedAt: &now,
 	}
 	assistant := persistence.Message{
 		ID: uuid.New(), SessionID: sessionID, RunID: &runID,
 		SessionSeq: seq + sessionSeqStep, Role: "assistant",
+		Parts:  persistence.MarshalParts(nil),
 		Status: messageStreaming, CreatedAt: now,
 	}
 	if err = tx.Create(&[]persistence.Message{user, assistant}).Error; err != nil {

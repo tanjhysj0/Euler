@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 
@@ -16,12 +17,14 @@ import (
 )
 
 const (
-	codeInvalidRequest = "invalid_request"
-	codeInvalidPath    = "invalid_path"
-	codeNotFound       = "not_found"
-	codePathOutside    = "path_outside_workspace"
-	codeFileTooLarge   = "file_too_large"
-	codeInternalError  = "internal_error"
+	codeInvalidRequest   = "invalid_request"
+	codeInvalidPath      = "invalid_path"
+	codePathExists       = "path_exists"
+	codePermissionDenied = "permission_denied"
+	codeNotFound         = "not_found"
+	codePathOutside      = "path_outside_workspace"
+	codeFileTooLarge     = "file_too_large"
+	codeInternalError    = "internal_error"
 	// sniffLength 是传给 http.DetectContentType 的前缀长度。
 	sniffLength = 512
 	// decimalBase 是 Content-Length 数值使用的进制。
@@ -39,6 +42,7 @@ func NewHandler() *Handler {
 // Register 将目录浏览路由挂载到需要鉴权的 API 分组上。
 func (*Handler) Register(group *gin.RouterGroup) {
 	group.GET("/fs/directories", listDirectories)
+	group.POST("/fs/directories", createDirectoryHandler)
 }
 
 func listDirectories(c *gin.Context) {
@@ -48,6 +52,35 @@ func listDirectories(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, listing)
+}
+
+// createDirectoryRequest 是在 parent_path 下创建单层子目录的请求体。
+type createDirectoryRequest struct {
+	ParentPath string `json:"parent_path"`
+	Name       string `json:"name"`
+}
+
+func createDirectoryHandler(c *gin.Context) {
+	var request createDirectoryRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		api.AbortWithError(c, http.StatusBadRequest, codeInvalidRequest, "请求体不是合法的 JSON")
+		return
+	}
+	directory, err := CreateDirectory(request.ParentPath, request.Name)
+	if err != nil {
+		switch {
+		case errors.Is(err, os.ErrExist):
+			api.AbortWithError(c, http.StatusConflict, codePathExists, "同名目录已存在")
+		case errors.Is(err, os.ErrPermission):
+			api.AbortWithError(c, http.StatusForbidden, codePermissionDenied,
+				"没有在该目录下创建子目录的权限")
+		default:
+			api.AbortWithError(c, http.StatusBadRequest, codeInvalidPath,
+				"目录名无效或父目录不可访问")
+		}
+		return
+	}
+	c.JSON(http.StatusCreated, directory)
 }
 
 // FileHandler 提供工作区文件树以及工作区产物的预览或下载接口。
