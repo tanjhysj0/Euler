@@ -6,7 +6,7 @@ import { useRunStore } from '../../stores/run'
 import MarkdownView from '../../components/MarkdownView'
 import ApprovalCard from './ApprovalCard'
 import { ToolRow } from './ToolRow'
-import { buildRunTimeline, mergeStreamingText } from './timeline'
+import { buildRunTimeline, groupToolItems, mergeStreamingText } from './timeline'
 import type { TimelineItem } from './timeline'
 
 interface RunTimelineProps {
@@ -22,7 +22,7 @@ interface RunTimelineProps {
 
 // RunTimeline 在 Run 进行中按 SSE 事件顺序还原真实对话过程：
 // 思考、文本与工具调用可以交错出现，最终回答位于工具执行之后。
-// 连接时服务端会回放该 Run 的全部持久化事件，因此刷新后也能完整重建。
+// 连续的工具调用自成一组，可单独收起；连接时服务端会回放全部持久化事件。
 export default function RunTimeline({
   runId,
   messageId,
@@ -34,12 +34,12 @@ export default function RunTimeline({
   const liveEvents = useRunStore((state) => state.timelineEvents[runId])
   const delta = useRunStore((state) => state.deltas[messageId] ?? '')
   const reasoningDelta = useRunStore((state) => state.reasoning[messageId] ?? '')
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set())
   // 服务端 content 可能落后于实时增量，按重叠部分去重后拼接；
   // 终态后 content 是权威全文，不再拼接本地增量。
   const fallbackText = streaming ? mergeStreamingText(fallbackContent, delta) : fallbackContent
   const fetchedSnapshot = useRunSnapshot(snapshot ? undefined : runId).data
   const effectiveSnapshot = snapshot ?? fetchedSnapshot
-  const [collapsed, setCollapsed] = useState(false)
 
   const items = useMemo(() => {
     const built = buildRunTimeline(liveEvents ?? [])
@@ -104,7 +104,22 @@ export default function RunTimeline({
     return result
   }, [liveEvents, effectiveSnapshot, fallbackText, messageId, reasoningDelta, streaming])
 
-  if (items.length === 0) {
+  // 连续工具调用分组后，每组独立收起，互不影响。
+  const grouped = useMemo(() => groupToolItems(items), [items])
+
+  const toggleGroup = (key: string) => {
+    setCollapsedGroups((previous) => {
+      const next = new Set(previous)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }
+
+  if (grouped.length === 0) {
     return null
   }
 
@@ -114,23 +129,13 @@ export default function RunTimeline({
       .filter((approval) => approval.status === 'pending')
       .map((approval) => [approval.tool_call_id, approval]),
   )
-  const toolCount = items.filter((item) => item.kind === 'tool').length
   const renderedApprovals = new Set<string>()
 
   return (
     <div className="message-item message-assistant">
       <span className="role-label">助手</span>
       <div className="run-timeline">
-        {toolCount > 0 && (
-          <Button
-            size="small"
-            className="timeline-toggle"
-            onClick={() => setCollapsed((value) => !value)}
-          >
-            {collapsed ? `展开工具调用（${toolCount}）` : `收起工具调用（${toolCount}）`}
-          </Button>
-        )}
-        {items.map((item) => {
+        {grouped.map((item) => {
           if (item.kind === 'text') {
             return <MarkdownView key={item.key} content={item.content} />
           }
@@ -142,23 +147,37 @@ export default function RunTimeline({
               </details>
             )
           }
-          if (collapsed) {
-            return null
-          }
-          const tool = toolMap.get(item.toolCallId)
-          if (!tool) {
-            return null
-          }
-          const approval = pendingApprovals.get(tool.id)
-          if (!approval) {
-            return <ToolRow key={item.key} tool={tool} />
-          }
-          renderedApprovals.add(approval.id)
+          const collapsed = collapsedGroups.has(item.key)
           return (
-            <Fragment key={item.key}>
-              <ToolRow tool={tool} />
-              <ApprovalCard approval={approval} name={tool.name} onDecide={onDecide} />
-            </Fragment>
+            <div className="tool-group" key={item.key}>
+              <Button
+                size="small"
+                className="timeline-toggle"
+                onClick={() => toggleGroup(item.key)}
+              >
+                {collapsed
+                  ? `展开工具调用（${item.toolCallIds.length}）`
+                  : `收起工具调用（${item.toolCallIds.length}）`}
+              </Button>
+              {!collapsed &&
+                item.toolCallIds.map((toolCallId) => {
+                  const tool = toolMap.get(toolCallId)
+                  if (!tool) {
+                    return null
+                  }
+                  const approval = pendingApprovals.get(tool.id)
+                  if (!approval) {
+                    return <ToolRow key={toolCallId} tool={tool} />
+                  }
+                  renderedApprovals.add(approval.id)
+                  return (
+                    <Fragment key={toolCallId}>
+                      <ToolRow tool={tool} />
+                      <ApprovalCard approval={approval} name={tool.name} onDecide={onDecide} />
+                    </Fragment>
+                  )
+                })}
+            </div>
           )
         })}
         {/* 审批卡片不随工具列表收起，避免审批入口被隐藏。 */}

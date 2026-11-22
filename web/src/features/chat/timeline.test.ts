@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { RunEvent } from '../../api/types'
-import { buildRunTimeline, toTimelineEvent } from './timeline'
-import type { TimelineEvent } from './timeline'
+import { buildRunTimeline, groupToolItems, toTimelineEvent } from './timeline'
+import type { TimelineEvent, TimelineItem } from './timeline'
 
 function event(seq: number, type: string, payload: Record<string, unknown>): RunEvent {
   return {
@@ -28,6 +28,22 @@ describe('runTimeline', () => {
       toolCallId: 'tc1',
     })
     expect(toTimelineEvent(event(3, 'message.started', { id: 'm1' }))).toBeNull()
+  })
+
+  it('把连续工具调用合并为一组，文本与思考作为分组边界', () => {
+    const items: TimelineItem[] = [
+      { kind: 'text', key: 'text-1', messageId: 'm1', content: '先看' },
+      { kind: 'tool', key: 'tool-1', toolCallId: 'tc1' },
+      { kind: 'tool', key: 'tool-2', toolCallId: 'tc2' },
+      { kind: 'reasoning', key: 'reasoning-1', messageId: 'm1', content: '想一想' },
+      { kind: 'tool', key: 'tool-3', toolCallId: 'tc3' },
+    ]
+    expect(groupToolItems(items)).toEqual([
+      { kind: 'text', key: 'text-1', messageId: 'm1', content: '先看' },
+      { kind: 'tool-group', key: 'tool-group-tc1', toolCallIds: ['tc1', 'tc2'] },
+      { kind: 'reasoning', key: 'reasoning-1', messageId: 'm1', content: '想一想' },
+      { kind: 'tool-group', key: 'tool-group-tc3', toolCallIds: ['tc3'] },
+    ])
   })
 
   it('按文本、工具、文本的顺序重建交错时间线', () => {

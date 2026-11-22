@@ -825,6 +825,13 @@ body {
   color: var(--text-muted) !important;
 }
 
+/* 连续工具调用为一组，组内自行收展，不影响其他工具段。 */
+.tool-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .tool-row {
   border-top: 1px dashed var(--divider);
   padding: 10px 0;

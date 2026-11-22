@@ -417,6 +417,58 @@ describe('ChatPanel', () => {
     ).toBeTruthy()
   })
 
+  it('连续工具调用按段收起，不影响其他工具组', async () => {
+    const shellCall = (id: string, command: string): ToolCallView => ({
+      id,
+      run_id: 'r1',
+      name: 'shell',
+      arguments_json: { command, dir: '/tmp/ws' },
+      status: 'succeeded',
+      result_json: { output: '', exit_code: 0, timed_out: false, truncated: false },
+      created_at: '2026-11-18T10:00:02Z',
+    })
+    const writeCall: ToolCallView = {
+      id: 'tc3',
+      run_id: 'r1',
+      name: 'file_write',
+      arguments_json: { path: 'a.txt', content: 'hello' },
+      status: 'succeeded',
+      result_json: { status: 'succeeded' },
+      created_at: '2026-11-18T10:00:03Z',
+    }
+    const tools = [shellCall('tc1', 'ls'), shellCall('tc2', 'pwd'), writeCall]
+    messages = [
+      userMessage,
+      {
+        ...streamingMessage,
+        status: 'completed',
+        content: '中间说明最终回答',
+        parts: [
+          { type: 'tool', tool_call_id: 'tc1' },
+          { type: 'tool', tool_call_id: 'tc2' },
+          { type: 'text', text: '中间说明' },
+          { type: 'tool', tool_call_id: 'tc3' },
+          { type: 'text', text: '最终回答' },
+        ],
+        tool_calls: tools,
+      },
+    ]
+    snapshot = { ...makeSnapshot('succeeded'), tool_calls: tools }
+    renderWithProviders(<ChatPanel session={session} />)
+
+    expect(await screen.findByRole('button', { name: '收起工具调用（2）' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '收起工具调用（1）' })).toBeVisible()
+    expect(await screen.findAllByRole('button', { name: /执行命令/ })).toHaveLength(2)
+
+    await userEvent.click(screen.getByRole('button', { name: '收起工具调用（2）' }))
+    expect(screen.queryAllByRole('button', { name: /执行命令/ })).toHaveLength(0)
+    expect(screen.getByRole('button', { name: /写入文件/ })).toBeVisible()
+    expect(screen.getByText('最终回答')).toBeVisible()
+
+    await userEvent.click(screen.getByRole('button', { name: '展开工具调用（2）' }))
+    expect(await screen.findAllByRole('button', { name: /执行命令/ })).toHaveLength(2)
+  })
+
   it('Enter 发送消息并清空草稿', async () => {
     messages = [userMessage, { ...streamingMessage, status: 'completed', content: '回答完毕' }]
     // 消息已完成即上一轮 Run 结束，快照需返回终态，输入区才可发送。

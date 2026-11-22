@@ -17,6 +17,40 @@ export type TimelineItem =
   | { kind: 'reasoning'; key: string; messageId: string; content: string }
   | { kind: 'tool'; key: string; toolCallId: string }
 
+// RenderItem 是分组后的渲染条目：连续工具调用被合并为 tool-group，
+// 其余文本与思考条目保持原样。
+export type RenderItem = Exclude<TimelineItem, { kind: 'tool' }> | ToolGroupItem
+
+// ToolGroupItem 表示一段连续的工具调用。一次模型输出可能连续调用多个工具，
+// 收起时只隐藏这一段，而不是整条消息里的全部工具。
+export interface ToolGroupItem {
+  kind: 'tool-group'
+  key: string
+  toolCallIds: string[]
+}
+
+// groupToolItems 把连续的工具调用合并为一组；文本或思考会切断分组。
+export function groupToolItems(items: TimelineItem[]): RenderItem[] {
+  const grouped: RenderItem[] = []
+  for (const item of items) {
+    if (item.kind !== 'tool') {
+      grouped.push(item)
+      continue
+    }
+    const last = grouped[grouped.length - 1]
+    if (last?.kind === 'tool-group') {
+      last.toolCallIds.push(item.toolCallId)
+      continue
+    }
+    grouped.push({
+      kind: 'tool-group',
+      key: `tool-group-${item.toolCallId}`,
+      toolCallIds: [item.toolCallId],
+    })
+  }
+  return grouped
+}
+
 function stringField(payload: Record<string, unknown>, key: string): string {
   const value = payload[key]
   return typeof value === 'string' ? value : ''
