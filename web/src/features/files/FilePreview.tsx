@@ -31,10 +31,14 @@ export default function FilePreview({ workspaceId, path }: FilePreviewProps) {
   const isImage = imageExtensions.has(extension)
   const contentQuery = useFileContent(workspaceId, path, !isImage)
   const url = contentURL(workspaceId, path)
-  const download = <Button href={`${url}&download=true`}>下载</Button>
+  const download = (
+    <Button className="file-download" href={`${url}&download=true`}>
+      下载
+    </Button>
+  )
   if (isImage) {
     return (
-      <Space orientation="vertical" style={{ width: '100%' }}>
+      <Space className="file-image" orientation="vertical" style={{ width: '100%' }}>
         <img src={url} alt={path} style={{ maxWidth: '100%' }} />
         {download}
       </Space>
@@ -59,7 +63,7 @@ export default function FilePreview({ workspaceId, path }: FilePreviewProps) {
   }
   if (isTextType(contentQuery.data.contentType)) {
     return (
-      <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+      <pre className="file-text-preview" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
         {contentQuery.data.text}
       </pre>
     )

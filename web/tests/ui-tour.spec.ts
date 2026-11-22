@@ -132,8 +132,15 @@ test('Web 控制台全流程操作截图巡检', async ({ page }) => {
   // 12. 再次发送任务，工具执行完成并生成文件
   await sendMessage(page, '创建验收文档')
   await expect(page.getByText('已完成')).toBeVisible()
-  await expect(page.getByText('file_write').first()).toBeVisible()
+  await expect(page.locator('.tool-row[data-tool="file_write"]').first()).toContainText('写入文件')
   await expect(page.getByRole('treeitem', { name: 'note.txt' })).toBeVisible()
+
+  // 12b. 工具行默认只显示自然语言动作，展开后才出现原始参数入口
+  const writeRow = page.locator('.tool-row[data-tool="file_write"]').first()
+  await writeRow.locator('.tool-summary').click()
+  await expect(writeRow.getByText('查看原始参数与结果')).toBeVisible()
+  await shot(page, '12b-tool-expanded.png')
+  await writeRow.locator('.tool-summary').click()
   await shot(page, '12-run-succeeded.png')
 
   // 13. 点击文件树中的产物进行预览
@@ -143,7 +150,7 @@ test('Web 控制台全流程操作截图巡检', async ({ page }) => {
 
   // 14. 刷新页面，验证历史消息、工具时间线与预览均恢复
   await page.reload()
-  await expect(page.getByText('file_write').first()).toBeVisible()
+  await expect(page.locator('.tool-row[data-tool="file_write"]').first()).toContainText('写入文件')
   await page.getByRole('treeitem', { name: 'note.txt' }).click()
   await expect(page.locator('pre')).toContainText('# Euler 验收')
   await shot(page, '14-reload-restore.png')
@@ -163,13 +170,15 @@ test('Web 控制台全流程操作截图巡检', async ({ page }) => {
   // 17. 工具执行失败仍能正常收尾
   await sendMessage(page, '读取缺失文件')
   await expect(page.getByText('读取失败，任务结束。')).toBeVisible()
-  await expect(page.getByText('file_not_found').first()).toBeVisible()
+  await expect(page.locator('.tool-row[data-tool="file_read"]').first()).toContainText(/文件不存在|file_not_found/)
+  await page.locator('.tool-row[data-tool="file_read"]').first().scrollIntoViewIfNeeded()
   await shot(page, '17-tool-failed.png')
 
   // 18. 单轮创建多个文件，文件树分别展示
   await sendMessage(page, '创建多个文件')
   await expect(page.getByText('已创建两个文件。')).toBeVisible()
-  await expect(page.getByText('file_write')).toHaveCount(2)
+  await expect(page.locator('.tool-row[data-tool="file_write"]')).toHaveCount(2)
+  await page.locator('.tool-row[data-tool="file_write"]').last().scrollIntoViewIfNeeded()
   await shot(page, '18-multiple-files.png')
 
   // 19. 预览其中一个文件
@@ -278,7 +287,7 @@ test('Web 控制台全流程操作截图巡检', async ({ page }) => {
   // 34. 执行一次带工具调用的任务，确保工具时间线存在
   await sendMessage(page, '创建验收文档')
   await expect(page.getByText('已完成')).toBeVisible()
-  await expect(page.getByText('file_write').first()).toBeVisible()
+  await expect(page.locator('.tool-row[data-tool="file_write"]').first()).toContainText('写入文件')
   await shot(page, '35-timeline-visible.png')
 
   // 35. 收起工具时间线
@@ -290,6 +299,22 @@ test('Web 控制台全流程操作截图巡检', async ({ page }) => {
   await page.getByRole('button', { name: '展开工具时间线' }).click()
   await expect(page.getByRole('button', { name: '收起工具时间线' })).toBeVisible()
   await shot(page, '37-timeline-expanded.png')
+
+  // 37. 依次切换四套主题，截取真实页面效果
+  const themes: Array<{ label: string; id: string }> = [
+    { label: '石墨', id: 'graphite' },
+    { label: '纸白', id: 'paper' },
+    { label: '青瓷', id: 'celadon' },
+    { label: '午夜霓虹', id: 'midnight' },
+  ]
+  for (const theme of themes) {
+    await page.getByLabel('切换主题').click()
+    const menu = page.locator('.ant-dropdown')
+    await expect(menu).toBeVisible()
+    await menu.getByText(theme.label, { exact: true }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme.id)
+    await shot(page, `38-theme-${theme.id}.png`)
+  }
 
   // 记录浏览器控制台与网络错误，便于人工复核（不因此判定用例失败）。
   console.log(`控制台错误数量：${consoleErrors.length}`)

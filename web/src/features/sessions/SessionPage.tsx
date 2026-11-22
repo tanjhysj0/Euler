@@ -1,4 +1,4 @@
-import { Alert, Button, Empty, Space, Tag, Typography } from 'antd'
+import { Alert, Button, Empty, Tag, Typography } from 'antd'
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { APIError } from '../../api/client'
@@ -31,28 +31,37 @@ export default function SessionPage() {
     return <Empty description="加载会话中…" />
   }
   return (
-    <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-      <Typography.Title level={4} style={{ margin: 0 }}>
-        {session.title}
-      </Typography.Title>
-      <Space wrap>
-        <Typography.Text code>{session.workspace.path}</Typography.Text>
-        <Tag>{session.model.name}</Tag>
-        <Tag color="blue">{session.status}</Tag>
-        <Button size="small" onClick={() => setFilesOpen((open) => !open)}>
-          {filesOpen ? '收起文件' : '展开文件'}
-        </Button>
-      </Space>
-      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
+    <div className="session-page">
+      <div className="session-heading">
+        <Typography.Title level={4} className="session-title" style={{ margin: 0 }}>
+          {session.title}
+        </Typography.Title>
+        <div className="session-meta">
+          <Typography.Text code className="session-path">
+            {session.workspace.path}
+          </Typography.Text>
+          <Tag className="session-model-tag">{session.model.name}</Tag>
+          <Tag color="blue">{session.status}</Tag>
+          <Button
+            size="small"
+            type="text"
+            className="session-files-toggle"
+            onClick={() => setFilesOpen((open) => !open)}
+          >
+            {filesOpen ? '收起文件' : '展开文件'}
+          </Button>
+        </div>
+      </div>
+      <div className="session-body">
+        <div className="session-chat">
           <ChatPanel key={session.id} session={session} />
         </div>
         {filesOpen && (
-          <div style={{ width: 380, flexShrink: 0 }}>
+          <div className="session-files">
             <FilePanel workspaceId={session.workspace.id} />
           </div>
         )}
       </div>
-    </Space>
+    </div>
   )
 }

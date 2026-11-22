@@ -51,8 +51,8 @@ test('自动工作区、工具执行与产物预览', async ({ page }) => {
   await newSession(page)
   await send(page, '创建验收文档')
 
-  // 工具执行完成后时间线展示工具名、成功状态与结果，Run 进入已完成。
-  await expect(page.getByText('file_write').first()).toBeVisible()
+  // 工具执行完成后时间线展示自然语言动作、成功状态与结果，Run 进入已完成。
+  await expect(page.locator('.tool-row[data-tool="file_write"]').first()).toContainText('写入文件')
   await expect(page.getByText('成功').first()).toBeVisible()
   await expect(page.getByText('已完成')).toBeVisible()
   await expect(page.getByText(/可以在右侧预览/)).toBeVisible()
@@ -64,7 +64,7 @@ test('自动工作区、工具执行与产物预览', async ({ page }) => {
 
   // 刷新后历史消息、工具时间线与产物依旧可恢复。
   await page.reload()
-  await expect(page.getByText('file_write').first()).toBeVisible()
+  await expect(page.locator('.tool-row[data-tool="file_write"]').first()).toContainText('写入文件')
   await expect(page.getByRole('treeitem', { name: 'note.txt' })).toBeVisible()
   await page.getByRole('treeitem', { name: 'note.txt' }).click()
   await expect(page.locator('pre')).toContainText('# Euler 验收')
@@ -131,9 +131,10 @@ test('工具执行失败在时间线展示错误结果', async ({ page }) => {
   await newSession(page)
   await send(page, '读取缺失文件')
 
-  await expect(page.getByText('file_read').first()).toBeVisible()
+  const failedTool = page.locator('.tool-row[data-tool="file_read"]').first()
+  await expect(failedTool).toContainText('读取文件')
   await expect(page.getByText('失败').first()).toBeVisible()
-  await expect(page.getByText(/file_not_found/).first()).toBeVisible()
+  await expect(failedTool).toContainText(/文件不存在|file_not_found/)
   // 工具失败是模型可观察到的结果，Run 本身仍能正常收尾。
   await expect(page.getByText('读取失败，任务结束。')).toBeVisible()
   await expect(page.getByText('已完成')).toBeVisible()
@@ -144,7 +145,7 @@ test('单轮写入多个文件后文件树可分别预览', async ({ page }) => 
   await newSession(page)
   await send(page, '创建多个文件')
 
-  await expect(page.getByText('file_write')).toHaveCount(2)
+  await expect(page.locator('.tool-row[data-tool="file_write"]')).toHaveCount(2)
   await expect(page.getByText('已创建两个文件。')).toBeVisible()
   await expect(page.getByText('已完成')).toBeVisible()
 

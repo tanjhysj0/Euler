@@ -37,12 +37,13 @@ const (
 	minLimit    = 1
 	// noRoundLimit 是轮次上限的“不设限”取值，此时只受运行时长约束。
 	noRoundLimit        = 0
+	noToolCallLimit     = 0
 	dirPerm             = 0o755
 	filePerm            = 0o600
 	logKeyError         = "error"
 	defaultMaxRounds    = noRoundLimit
-	defaultMaxToolCalls = 120
-	defaultMaxDuration  = 15 * time.Minute
+	defaultMaxToolCalls = noToolCallLimit
+	defaultMaxDuration  = 10 * time.Minute
 	emptyInput          = ""
 
 	statusSucceeded = "succeeded"
@@ -140,7 +141,8 @@ func bindFlags() *options {
 	flag.StringVar(&opts.reasoningEffort, "reasoning-effort",
 		env("EULER_REASONING_EFFORT"), "推理强度：low/medium/high/max")
 	flag.IntVar(&opts.maxRounds, "max-rounds", opts.maxRounds, "模型轮次上限（0 表示不设限）")
-	flag.IntVar(&opts.maxToolCalls, "max-tool-calls", opts.maxToolCalls, "工具调用次数上限")
+	flag.IntVar(&opts.maxToolCalls, "max-tool-calls", opts.maxToolCalls,
+		"工具调用次数上限（0 表示不设限）")
 	flag.IntVar(&opts.maxToolOutput, "tool-output-bytes", opts.maxToolOutput,
 		"单次工具输出字节上限")
 	flag.DurationVar(&opts.maxDuration, "max-duration", opts.maxDuration, "整次运行时长上限")
@@ -170,8 +172,10 @@ func validate(opts options) error {
 		return errors.New("missing api key: set EULER_MODEL_API_KEY or OPENAI_API_KEY")
 	case opts.maxRounds < noRoundLimit:
 		return errors.New("max rounds must be non-negative")
-	case opts.maxToolCalls < minLimit || opts.maxDuration < minLimit:
-		return errors.New("tool call and duration limits must be positive")
+	case opts.maxToolCalls < noToolCallLimit:
+		return errors.New("max tool calls must be non-negative")
+	case opts.maxDuration < minLimit:
+		return errors.New("duration limit must be positive")
 	}
 	return nil
 }

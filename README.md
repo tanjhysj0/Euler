@@ -143,9 +143,9 @@ make test-e2e  # Playwright 端到端测试
 | `listen` | `127.0.0.1:8080` | 仅允许 loopback 地址 |
 | `workspace_root` | `~/EulerWorkspaces` | 工作区根目录 |
 | `allowed_origins` | 空 | 额外允许的 Origin |
-| `agent.max_model_rounds` | `12` | 模型轮次上限 |
-| `agent.max_tool_calls` | `40` | 工具调用次数上限 |
-| `agent.max_duration` | `15m` | 单次 run 时长上限 |
+| `agent.max_model_rounds` | `0` | 模型轮次上限，`0` 表示不限制 |
+| `agent.max_tool_calls` | `0` | 工具调用次数上限，`0` 表示不限制 |
+| `agent.max_duration` | `10m` | 单次 run 时长上限 |
 | `agent.max_output_bytes` | `65536` | 输出上限 |
 | `shell_timeout` | `2m` | 单条 shell 命令超时 |
 | `shell_output_bytes` | `1MiB` | 单条命令输出上限 |

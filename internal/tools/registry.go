@@ -52,6 +52,7 @@ const (
 	rejectedMessage   = "用户拒绝"
 
 	singleToolCall   = 1
+	noToolCallLimit  = 0
 	noOutputLimit    = 0
 	emptyObservation = ""
 
@@ -138,7 +139,9 @@ func (r *Registry) invoke(ctx context.Context, call toolInvocation) (string, err
 	}); err != nil {
 		return emptyObservation, err
 	}
-	if r.calls.Add(singleToolCall) > int64(r.deps.MaxToolCalls) {
+	used := r.calls.Add(singleToolCall)
+	if maxCalls := r.deps.MaxToolCalls; maxCalls > noToolCallLimit &&
+		used > int64(maxCalls) {
 		return emptyObservation, r.budgetExceeded(ctx, rowID)
 	}
 	if err := r.appendEvent(ctx, eventToolStarted, map[string]any{

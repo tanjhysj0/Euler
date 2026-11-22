@@ -17,7 +17,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Listen != "127.0.0.1:8080" {
 		t.Fatalf("listen=%q", cfg.Listen)
 	}
-	if cfg.DatabaseURL == "" || cfg.Agent.MaxModelRounds != 12 {
+	if cfg.DatabaseURL == "" || cfg.Agent.MaxModelRounds != 0 ||
+		cfg.Agent.MaxToolCalls != 0 || cfg.Agent.MaxDuration != 10*time.Minute {
 		t.Fatalf("cfg=%+v", cfg)
 	}
 	if cfg.ModelTimeout != 2*time.Minute {
@@ -31,8 +32,8 @@ func TestLoadDefaults(t *testing.T) {
 func TestLoadRejectsInvalidLimits(t *testing.T) {
 	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	body := []byte("agent:\n  max_model_rounds: 0\n  max_tool_calls: 40\n" +
-		"  max_duration: 15m\n  max_output_bytes: 65536\n")
+	body := []byte("agent:\n  max_model_rounds: -1\n  max_tool_calls: -1\n" +
+		"  max_duration: 10m\n  max_output_bytes: 65536\n")
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}

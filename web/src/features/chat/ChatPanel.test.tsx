@@ -502,7 +502,7 @@ describe('ChatPanel', () => {
     }
     snapshot = { ...makeSnapshot('waiting_approval'), tool_calls: [toolCall] }
     renderWithProviders(<ChatPanel session={session} />)
-    expect(await screen.findByText('shell')).toBeVisible()
+    expect(await screen.findByText('执行命令')).toBeVisible()
     // Run 状态 Tag 与工具卡状态 Tag 各一个。
     expect(screen.getAllByText('等待审批')).toHaveLength(2)
   })
@@ -519,8 +519,28 @@ describe('ChatPanel', () => {
     }
     snapshot = { ...makeSnapshot('running'), tool_calls: [toolCall] }
     renderWithProviders(<ChatPanel session={session} />)
-    expect(await screen.findByText('file_write')).toBeVisible()
+    expect(await screen.findByText('写入文件')).toBeVisible()
     expect(screen.getByText('mystery')).toBeVisible()
+  })
+
+  it('工具详情默认折叠，展开后显示可读内容与原始参数', async () => {
+    const toolCall: ToolCallView = {
+      id: 'tc-write',
+      run_id: 'r1',
+      name: 'file_write',
+      arguments_json: { path: 'a.txt', content: 'hello' },
+      status: 'succeeded',
+      result_json: { path: 'a.txt' },
+      created_at: '2026-11-18T10:00:00Z',
+    }
+    snapshot = { ...makeSnapshot('succeeded'), tool_calls: [toolCall] }
+    renderWithProviders(<ChatPanel session={session} />)
+    const summary = await screen.findByRole('button', { name: /写入文件/ })
+    expect(screen.queryByText('查看原始参数与结果')).not.toBeInTheDocument()
+
+    await userEvent.click(summary)
+    expect(screen.getByText('查看原始参数与结果')).toBeVisible()
+    expect(screen.getByText('hello')).toBeVisible()
   })
 
   it('streaming 增量与已刷盘 content 重叠去重，不重复拼接', async () => {

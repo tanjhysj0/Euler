@@ -1,4 +1,4 @@
-import { Button, Input, List, message, Space, Tag, Typography } from 'antd'
+import { Button, Input, List, message, Space, Tag } from 'antd'
 import { useState } from 'react'
 import { NavLink, useMatch, useNavigate } from 'react-router-dom'
 import { APIError } from '../../api/client'
@@ -8,6 +8,7 @@ import {
   useSessionList,
 } from '../../api/queries'
 import type { SessionView } from '../../api/types'
+import ThemeSwitcher from '../../components/ThemeSwitcher'
 
 function workspaceBasename(path: string): string {
   const parts = path.split('/').filter(Boolean)
@@ -25,8 +26,7 @@ function matchesKeyword(session: SessionView, keyword: string): boolean {
   )
 }
 
-// SessionSidebar：标题/路径搜索、最近活跃排序、状态位与工作区 basename。
-// 后端列表暂无 Run 状态字段，T11 先展示会话 status，Run 状态在 T12 接入。
+// SessionSidebar：品牌区、标题/路径搜索、最近会话与主题切换入口。
 export default function SessionSidebar() {
   const [search, setSearch] = useState('')
   const navigate = useNavigate()
@@ -63,23 +63,30 @@ export default function SessionSidebar() {
 
   return (
     <div className="session-sidebar">
-      <Typography.Title level={5} style={{ margin: 0 }}>
-        Euler 工作台
-      </Typography.Title>
+      <div className="sidebar-brand">
+        <span className="sidebar-logo">E</span>
+        <div className="sidebar-brand-text">
+          <strong>Euler</strong>
+          <small>编码 Agent 工作台</small>
+        </div>
+      </div>
       <Button
         type="primary"
         block
+        className="new-session-button"
         loading={createSession.isPending}
         onClick={() => void handleCreate()}
       >
         新建会话
       </Button>
       <Input
+        className="session-search"
         placeholder="搜索标题或路径"
         allowClear
         value={search}
         onChange={(event) => setSearch(event.target.value)}
       />
+      <div className="sidebar-section-label">最近</div>
       <List
         className="session-sidebar-list"
         dataSource={sessions}
@@ -94,6 +101,7 @@ export default function SessionSidebar() {
                 type="link"
                 size="small"
                 danger
+                className="session-delete"
                 onClick={(event) => {
                   event.stopPropagation()
                   void handleDelete(session.id)
@@ -119,7 +127,12 @@ export default function SessionSidebar() {
           </List.Item>
         )}
       />
-      <NavLink to="/settings">模型设置</NavLink>
+      <div className="sidebar-footer">
+        <ThemeSwitcher />
+        <NavLink className="sidebar-link" to="/settings">
+          模型设置
+        </NavLink>
+      </div>
     </div>
   )
 }

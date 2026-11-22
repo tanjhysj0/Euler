@@ -102,6 +102,14 @@ func ensureSessionIdle(tx *gorm.DB, sessionID uuid.UUID) error {
 // deleteSessionData 按外键依赖逆序清理会话数据。工作区记录被多个会话
 // 共享，必须保留。
 func deleteSessionData(tx *gorm.DB, sessionID uuid.UUID) error {
+	// tool_calls.approval_id 与 approvals.tool_call_id 互相引用，直接删 approvals
+	// 会触发 tool_calls_approval_id_fkey。先解除 tool_calls 一侧的引用再按序清理。
+	if err := tx.Model(&persistence.ToolCall{}).
+		Where("run_id IN (?)", tx.Model(&persistence.Run{}).Select("id").
+			Where("session_id = ?", sessionID)).
+		Update("approval_id", nil).Error; err != nil {
+		return fmt.Errorf("clear tool call approvals: %w", err)
+	}
 	runScoped := []struct {
 		model any
 		name  string

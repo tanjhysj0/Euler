@@ -335,6 +335,25 @@ var (
 	_ Executor        = (*unitExecutor)(nil)
 )
 
+func TestRegistryAllowsUnlimitedToolCalls(t *testing.T) {
+	recorder := newUnitRecorder()
+	registry := newUnitRegistry(recorder, &unitPublisher{}, &fakeGate{
+		decision: approval.Decision{Approved: true, Status: approval.StatusApproved},
+	}, 0)
+	built, err := registry.Tools(
+		&unitFiles{content: map[string][]byte{"a.txt": []byte("x")}},
+		&unitExecutor{}, "/tmp/unit", nil,
+	)
+	require.NoError(t, err)
+	for range 3 {
+		_, err = invokeUnitTool(t, built, "file_read", `{"path":"a.txt"}`)
+		require.NoError(t, err)
+	}
+	counts := recorder.counts()
+	require.Equal(t, 3, counts.started)
+	require.Zero(t, counts.failed)
+}
+
 // TestRegistrySubmitReportsCompletion 确认 submit 无需审批即可记录验收摘要，
 // 并由运行时的直接返回分支负责结束。
 func TestRegistrySubmitReportsCompletion(t *testing.T) {

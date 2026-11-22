@@ -1,4 +1,4 @@
-import { Alert, Button, Empty, Input, message, Modal, Select, Space, Tag, Typography } from 'antd'
+import { Alert, Button, Empty, Input, message, Modal, Select, Typography } from 'antd'
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { APIError } from '../../api/client'
@@ -22,14 +22,14 @@ interface ChatPanelProps {
   session: SessionView
 }
 
-const runStatusLabels: Record<RunStatus, { label: string; color: string }> = {
-  queued: { label: '排队中', color: 'default' },
-  running: { label: '运行中', color: 'processing' },
-  waiting_approval: { label: '等待审批', color: 'warning' },
-  succeeded: { label: '已完成', color: 'success' },
-  failed: { label: '失败', color: 'error' },
-  cancelled: { label: '已取消', color: 'default' },
-  interrupted: { label: '已中断', color: 'default' },
+const runStatusLabels: Record<RunStatus, string> = {
+  queued: '排队中',
+  running: '运行中',
+  waiting_approval: '等待审批',
+  succeeded: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+  interrupted: '已中断',
 }
 
 const connectionLabels: Record<ConnectionStatus, string> = {
@@ -137,13 +137,20 @@ export default function ChatPanel({ session }: ChatPanelProps) {
   const runStatus = snapshot ? runStatusLabels[snapshot.run.status] : null
 
   return (
-    <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-      <Space wrap>
-        {runStatus && <Tag color={runStatus.color}>{runStatus.label}</Tag>}
-        {active && connection && (
-          <Typography.Text type="secondary">{connectionLabels[connection]}</Typography.Text>
+    <div className="chat-panel">
+      <div className="run-line">
+        {runStatus && snapshot && (
+          <span className={`run-status run-status-${snapshot.run.status}`}>
+            <i className="run-status-dot" />
+            {runStatus}
+          </span>
         )}
-      </Space>
+        {active && connection && (
+          <Typography.Text type="secondary" className="connection-text">
+            {connectionLabels[connection]}
+          </Typography.Text>
+        )}
+      </div>
       {snapshot?.run.status === 'failed' && (
         <Alert
           type="error"
@@ -159,12 +166,14 @@ export default function ChatPanel({ session }: ChatPanelProps) {
           title="其他会话正在此目录执行任务，注意并发修改风险"
         />
       )}
-      {messagesQuery.isPending ? (
-        <Empty description="加载消息中…" />
-      ) : (
-        <MessageList messages={messages} deltas={deltas} reasoning={reasoning} />
-      )}
-      <ToolTimeline snapshot={snapshot} onDecide={onDecide} />
+      <div className="chat-scroll">
+        {messagesQuery.isPending ? (
+          <Empty description="加载消息中…" />
+        ) : (
+          <MessageList messages={messages} deltas={deltas} reasoning={reasoning} />
+        )}
+        <ToolTimeline snapshot={snapshot} onDecide={onDecide} />
+      </div>
       <div className="composer">
         <Input.TextArea
           placeholder="输入消息"
@@ -218,6 +227,6 @@ export default function ChatPanel({ session }: ChatPanelProps) {
         }}
         onCancel={() => setStopOpen(false)}
       />
-    </Space>
+    </div>
   )
 }

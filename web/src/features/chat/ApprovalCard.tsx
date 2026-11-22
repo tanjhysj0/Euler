@@ -52,7 +52,12 @@ export default function ApprovalCard({ approval, name, onDecide }: ApprovalCardP
   }
 
   return (
-    <Card size="small" title={title} extra={<Tag color={status.color}>{status.label}</Tag>}>
+    <Card
+      size="small"
+      className="approval-card"
+      title={title}
+      extra={<Tag color={status.color}>{status.label}</Tag>}
+    >
       <Space orientation="vertical" size="small" style={{ width: '100%' }}>
         {isShell ? (
           <>

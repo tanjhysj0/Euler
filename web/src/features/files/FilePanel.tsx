@@ -1,4 +1,4 @@
-import { Alert, Button, Empty, Space, Tree, Typography } from 'antd'
+import { Alert, Button, Empty, Tree } from 'antd'
 import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { APIError } from '../../api/client'
@@ -75,6 +75,7 @@ function collectDirKeys(nodes: TreeNode[]): string[] {
 }
 
 // FilePanel 以 IDE 风格展示工作区文件树：目录点击展开/收起，文件点击预览。
+// 头部、树与预览区的颜色和间距由主题 CSS 统一接管。
 export default function FilePanel({ workspaceId }: FilePanelProps) {
   const queryClient = useQueryClient()
   const filesQuery = useWorkspaceFiles(workspaceId)
@@ -101,19 +102,20 @@ export default function FilePanel({ workspaceId }: FilePanelProps) {
   }
   const effectiveExpanded = expandedKeys ?? collectDirKeys(tree)
   return (
-    <Space orientation="vertical" size="small" style={{ width: '100%' }}>
-      <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-        <Typography.Text strong>工作区文件</Typography.Text>
+    <div className="file-panel">
+      <div className="file-panel-head">
+        <span>工作区文件</span>
         <Button
           size="small"
+          type="text"
           onClick={() => void queryClient.invalidateQueries({ queryKey: ['files', workspaceId] })}
         >
           刷新
         </Button>
-      </Space>
+      </div>
       <Tree
+        className="file-tree"
         blockNode
-        showLine
         treeData={tree}
         expandedKeys={effectiveExpanded}
         selectedKeys={selected === null ? [] : [selected]}
@@ -135,11 +137,11 @@ export default function FilePanel({ workspaceId }: FilePanelProps) {
         }}
       />
       {selected !== null && (
-        <div>
-          <Typography.Text type="secondary">{selected}</Typography.Text>
+        <div className="file-preview">
+          <span className="file-preview-path">{selected}</span>
           <FilePreview workspaceId={workspaceId} path={selected} />
         </div>
       )}
-    </Space>
+    </div>
   )
 }

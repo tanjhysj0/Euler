@@ -31,9 +31,9 @@ ARCH_ALIASES = {
     "arm64": "arm64",
 }
 DEFAULT_MODEL_BASE_URL = "https://api.deepseek.com"
-# 0 表示模型轮次不设限，只受 10 分钟工作时长约束。
+# 0 表示该维度不设限；Harbor 评测只保留 10 分钟工作时长约束。
 DEFAULT_MAX_ROUNDS = 0
-DEFAULT_MAX_TOOL_CALLS = 120
+DEFAULT_MAX_TOOL_CALLS = 0
 DEFAULT_MAX_DURATION_SEC = 600
 # exec 需要比 agent 自身预算更宽松，才能拿到它写出的结果而不是先被终止
 EXEC_TIMEOUT_MARGIN_SEC = 120
@@ -99,7 +99,8 @@ class EulerAgent(BaseAgent):
             os.environ.get("EULER_MAX_MODEL_ROUNDS"), DEFAULT_MAX_ROUNDS, allow_zero=True
         )
         self.max_tool_calls = _optional_int(
-            os.environ.get("EULER_MAX_TOOL_CALLS"), DEFAULT_MAX_TOOL_CALLS
+            os.environ.get("EULER_MAX_TOOL_CALLS"), DEFAULT_MAX_TOOL_CALLS,
+            allow_zero=True
         )
         self.max_duration_sec = _optional_int(
             os.environ.get("EULER_MAX_DURATION_SEC"), DEFAULT_MAX_DURATION_SEC
@@ -291,7 +292,7 @@ def _optional_int(
 ) -> int:
     """把可选环境变量解析为整数；非法值回退到默认值。
 
-    allow_zero 为真时接受 0（例如轮次上限用 0 表示不设限）。
+    allow_zero 为真时接受 0（例如轮次或工具调用上限用 0 表示不设限）。
     """
     if not value:
         return fallback

@@ -13,20 +13,21 @@ import (
 )
 
 const (
-	defaultListenAddr   = "127.0.0.1:8080"
-	defaultPrompt       = "coding"
-	defaultMaxRounds    = 12
-	defaultMaxToolCalls = 40
-	defaultMaxDuration  = 15 * time.Minute
+	defaultListenAddr = "127.0.0.1:8080"
+	defaultPrompt     = "coding"
+	// 模型轮次与工具调用默认不设限，只保留单次 Run 的时长约束。
+	defaultMaxRounds    = 0
+	defaultMaxToolCalls = 0
+	defaultMaxDuration  = 10 * time.Minute
 	defaultMaxOutput    = 64 * 1024
 	defaultShellTimeout = 2 * time.Minute
 	defaultShellOutput  = 1024 * 1024
 	defaultModelTimeout = 120 * time.Second
 	defaultPreview      = 1024 * 1024
 	defaultLangfuseEnv  = "local"
-	minAgentCount       = 1
 	minAgentDuration    = time.Nanosecond
 	minAgentOutput      = 1024
+	noAgentLimit        = 0
 	noDuration          = time.Duration(0)
 	emptyValue          = ""
 )
@@ -37,6 +38,7 @@ var validReasoningEffort = map[string]bool{
 }
 
 // AgentLimits 限制单次 Run 的模型轮次、工具调用次数、时长和输出。
+// MaxModelRounds 与 MaxToolCalls 为 0 表示不设限，只受 MaxDuration 约束。
 type AgentLimits struct {
 	MaxModelRounds int           `yaml:"max_model_rounds"`
 	MaxToolCalls   int           `yaml:"max_tool_calls"`
@@ -143,7 +145,7 @@ func (c Config) validate() error {
 }
 
 func (l AgentLimits) validate() error {
-	if l.MaxModelRounds < minAgentCount || l.MaxToolCalls < minAgentCount ||
+	if l.MaxModelRounds < noAgentLimit || l.MaxToolCalls < noAgentLimit ||
 		l.MaxDuration < minAgentDuration || l.MaxOutputBytes < minAgentOutput {
 		return errors.New("invalid agent limits")
 	}

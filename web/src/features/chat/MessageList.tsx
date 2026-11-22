@@ -1,4 +1,4 @@
-import { Empty, Space, Tag } from 'antd'
+import { Empty } from 'antd'
 import type { MessageView } from '../../api/types'
 import MarkdownView from '../../components/MarkdownView'
 
@@ -24,13 +24,13 @@ function mergeStreamingText(content: string, delta: string): string {
 }
 
 // MessageList 渲染消息 content（streaming 时拼接本地增量）与模型思考过程；
-// reasoning 只来自实时事件，不落库，刷新后不展示。
+// 角色标签与消息块类名供主题 CSS 区分用户/助手样式。
 export default function MessageList({ messages, deltas, reasoning }: MessageListProps) {
   if (messages.length === 0) {
     return <Empty description="暂无消息" />
   }
   return (
-    <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+    <div className="message-list">
       {messages.map((message) => {
         const content =
           message.status === 'streaming'
@@ -40,8 +40,13 @@ export default function MessageList({ messages, deltas, reasoning }: MessageList
         // 避免展示空的“思考过程”折叠区。
         const thinking = reasoning[message.id]?.trim()
         return (
-          <div key={message.id}>
-            <Tag>{message.role === 'user' ? '用户' : '助手'}</Tag>
+          <div
+            key={message.id}
+            className={`message-item message-${message.role}`}
+          >
+            <span className="role-label">
+              {message.role === 'user' ? '用户' : '助手'}
+            </span>
             {message.role !== 'user' && thinking && (
               <details className="reasoning-block">
                 <summary>{message.status === 'streaming' ? '思考中…' : '思考过程'}</summary>
@@ -52,6 +57,6 @@ export default function MessageList({ messages, deltas, reasoning }: MessageList
           </div>
         )
       })}
-    </Space>
+    </div>
   )
 }
