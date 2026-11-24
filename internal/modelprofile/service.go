@@ -1,5 +1,5 @@
 // Package modelprofile 管理兼容 OpenAI 的模型配置，并将 API key
-// 保存在 Keychain 或环境变量中。
+// 保存在系统密钥环或环境变量中。
 package modelprofile
 
 import (
@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	// SecretKindKeychain 将 API key 存储在 macOS Keychain 中。
+	// SecretKindKeychain 将 API key 存储在系统密钥环中。
 	SecretKindKeychain = "keychain"
 	// SecretKindEnvironment 从环境变量读取 API key。
 	SecretKindEnvironment = "environment"

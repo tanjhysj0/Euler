@@ -95,7 +95,7 @@ Go 单进程
 | 数据 | PostgreSQL、GORM | 业务数据、事件和状态持久化 |
 | 数据库迁移 | golang-migrate | 可重复、可审查的 schema 变更 |
 | 工作区安全路径 | `cyphar/filepath-securejoin` | 工作区内安全解析与打开路径 |
-| 系统钥匙串 | `zalando/go-keyring` | macOS Keychain 及跨平台密钥适配 |
+| 系统钥匙串 | `zalando/go-keyring` | 跨平台密钥环：macOS Keychain / Windows 凭据管理器 / Linux Secret Service |
 | 日志 | Go `log/slog` | 结构化日志与敏感字段过滤 |
 | 测试 | Go test、Vitest、Testing Library、Playwright | 单元、集成和端到端验证 |
 

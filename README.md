@@ -20,7 +20,7 @@ Euler 是一个本地优先的编码 Agent 工作台：由 Go 后端、React 控
 - **编码工具集**：`file_list`、`file_read`、`file_search`、`file_write`、`file_patch`、`shell`、`submit`。
 - **工作区与文件浏览**：目录树、文件内容预览（带大小限制），run 结束后自动列出新增产物。
 - **工作台界面**：工具时间线（命令输出、文件写入 diff、思考过程）、Markdown 与高亮渲染、历史 run 回放，内置石墨 / 纸白 / 青瓷 / 午夜霓虹四套主题。
-- **模型配置**：模型 Profile 存 Postgres，API Key 存 macOS Keychain，不落库、不写日志；支持从 Base URL 拉取可用模型列表。
+- **模型配置**：在控制台配置模型与 API Key，密钥可直接用环境变量，不落库、不写日志；支持从 Base URL 拉取可用模型列表。
 - **全链路追踪**：可选接入 Langfuse，记录每次模型调用与工具调用。
 - **Harbor 评测**：`euler-agent` 二进制直接上传到任务容器内执行，不需要宿主机服务或工作区挂载；内置按难度分组的精选任务清单。
 
@@ -66,7 +66,7 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 | `internal/run` | run 状态机、按会话并发控制、取消与启动恢复 |
 | `internal/session` | 会话与消息 |
 | `internal/workspace` | 工作区与文件浏览 |
-| `internal/modelprofile` | 模型 Profile 与 Keychain 密钥存储 |
+| `internal/modelprofile` | 模型配置与密钥存储 |
 | `internal/approval` | 审批服务（当前默认自动放行） |
 | `internal/event` | 事件存储与 SSE 广播 |
 | `internal/config` | 配置文件加载、默认值与校验 |
@@ -115,12 +115,13 @@ export EULER_LANGFUSE_PUBLIC_KEY='pk-...'
 export EULER_LANGFUSE_SECRET_KEY='sk-...'
 ```
 
-`make dev-api` 会自动从 `~/.zprofile` 读取 `LANGFUSE_HOST`、`LANGFUSE_BASE_URL`、
-`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`，因此本地用 Web 界面调试时默认带上追踪；
-未配置这些变量则不追踪。E2E 使用独立的配置文件与变量，不会上传追踪数据。
-启动日志出现 `langfuse tracing enabled` 表示生效。
+`make dev-api` 会在 macOS / Linux 上自动从 `~/.zprofile` 读取 `LANGFUSE_HOST`、
+`LANGFUSE_BASE_URL`、`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`，因此本地用 Web
+界面调试时默认带上追踪；其他平台或未使用 zsh 时请直接在当前 shell 导出这些变量。
+未配置则不追踪。E2E 使用独立的配置文件与变量，不会上传追踪数据。启动日志出现
+`langfuse tracing enabled` 表示生效。
 
-模型、Base URL 和 API Key 通过控制台的「模型配置」创建，密钥写入 macOS Keychain。
+模型、Base URL 和 API Key 在控制台的「模型配置」里填写；API Key 也可以直接来自环境变量，不会落库或写日志。
 
 ### 3. 启动
 
@@ -330,7 +331,7 @@ make harbor-clean           # 清理残留评测容器与网络（harbor-test �
 
 ## 设计说明与限制
 
-- **本地优先**：服务只监听 loopback，模型密钥保存在 Keychain，数据库地址只从环境变量读取。
+- **本地优先**：服务只监听 loopback，模型密钥可直接用环境变量（也可存系统密钥环），数据库地址只从环境变量读取。
 - **审批默认关闭**：`cmd/euler` 当前使用 `AutoApprove`；需要人工确认高风险工具时，把 `Gate` 换回 `approvals` 服务即可。
 - **评测镜像来源**：部分任务镜像只有 amd64 清单，在 arm64 机器上通过 Docker 模拟运行；Docker Hub 匿名限流时可用 `mirror.gcr.io` 拉取后重新打标签。
 - **困难任务耗时**：`gpt2-codegolf`、`make-mips-interpreter` 等任务可能用满 600 秒预算仍未完成，这是任务复杂度而非环境问题；容器内 CA 证书缺失与模型流超时已分别通过上传宿主机 CA bundle、10 秒空闲超时 + 5 分钟单次请求总时长处理，仍可通过 `agent/result.json` 的 `error_code` 区分预算耗尽（`run_timeout`）、模型超时（`model_timeout`）与环境失败。

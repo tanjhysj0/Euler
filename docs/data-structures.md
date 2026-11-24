@@ -57,10 +57,10 @@ model_profiles 1 ─── n sessions n ─── 1 workspaces
 | `base_url` | text NOT NULL | OpenAI 兼容端点 |
 | `model` | text NOT NULL | 模型名 |
 | `secret_kind` | text NOT NULL | `keychain` 或 `environment` |
-| `secret_ref` | text NOT NULL | Keychain 引用或环境变量名 |
+| `secret_ref` | text NOT NULL | 密钥环引用或环境变量名 |
 | `created_at` / `updated_at` | timestamptz | 时间戳 |
 
-密钥本身不落库：`keychain` 存 macOS Keychain，`environment` 从同名环境变量读取。API 响应中的 `Profile` 永远不包含密钥。
+密钥本身不落库：`keychain` 存系统密钥环（跨平台：macOS Keychain / Windows 凭据管理器 / Linux Secret Service），`environment` 从同名环境变量读取。API 响应中的 `Profile` 永远不包含密钥。
 
 ### 3.3 `sessions`
 
@@ -218,7 +218,7 @@ model_profiles 1 ─── n sessions n ─── 1 workspaces
 
 | `secret_kind` | 密钥来源 | `secret_ref` 含义 |
 |---|---|---|
-| `keychain` | macOS Keychain | Keychain 服务名，创建时可省略，默认 `profile/<id>` |
+| `keychain` | 系统密钥环 | 密钥环服务名，创建时可省略，默认 `profile/<id>` |
 | `environment` | 环境变量 | 环境变量名，必须匹配 `^[A-Za-z_][A-Za-z0-9_]*$` |
 
 ## 5. 消息片段 `messages.parts`

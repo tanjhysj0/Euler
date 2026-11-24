@@ -19,7 +19,8 @@ type SecretStore interface {
 }
 
 // KeychainStore 以服务名 "Euler" 和调用方提供的引用，
-// 将密钥存储在 macOS Keychain 中。
+// 将密钥存储在系统密钥环中（go-keyring 跨平台适配：macOS Keychain、
+// Windows 凭据管理器、Linux Secret Service）。
 type KeychainStore struct{}
 
 // Set 将 service 对应的 value 写入 Keychain。
