@@ -92,27 +92,19 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 
 ### 步骤
 
-**1. 启动数据库**
-
-```bash
-docker compose up -d postgres
-```
-
-默认连接串：`postgres://euler:euler@127.0.0.1:5432/euler?sslmode=disable`。
-
-**2. 启动服务**
+**1. 启动服务**
 
 ```bash
 make start
 ```
 
-启动数据库、后端（`http://127.0.0.1:8080`）与前端开发服务器（`http://127.0.0.1:5173`，代理 `/api` 与 `/health` 到后端，热更新）。
+自动拉起数据库（Postgres，默认连接串 `postgres://euler:euler@127.0.0.1:5432/euler?sslmode=disable`）、后端（`http://127.0.0.1:8080`）与前端开发服务器（`http://127.0.0.1:5173`，代理 `/api` 与 `/health` 到后端，热更新）。若只单独启动后端（`make dev-api`），需先 `make dev-db-up` 把数据库拉起来。
 
-**3. 配置模型**
+**2. 配置模型**
 
 打开控制台 `http://127.0.0.1:5173`，进入「模型配置」页面，填写模型的 Base URL、模型名与 API Key 后保存。Web 控制台的模型配置存在数据库，API Key 也可直接来自环境变量，不落库、不写日志。配好模型后即可创建会话执行任务。
 
-**4. 开始编码**
+**3. 开始编码**
 
 在控制台新建会话，输入任务描述；Agent 会在工作区读写文件、执行命令，右侧同步展示工具调用与产物。
 
