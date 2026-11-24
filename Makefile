@@ -8,11 +8,7 @@ EULER_CONFIG ?=
 # 本地开发库地址，默认与 compose.yaml 的凭据一致；同名环境变量优先。
 EULER_DATABASE_URL ?= postgres://euler:euler@127.0.0.1:5432/euler?sslmode=disable
 
-# Harbor 评测使用的默认模型；可用同名环境变量覆盖。
-EULER_MODEL_BASE_URL ?= https://api.deepseek.com
-EULER_MODEL ?= deepseek-v4-flash
-EULER_REASONING_EFFORT ?= high
-# 模型请求的空闲超时：首 token 或流中途超过该时长没有数据即失败。
+# Harbor 评测的模型请求超时预算；可用同名环境变量覆盖。
 EULER_MODEL_TIMEOUT ?= 10s
 # 单次模型请求的总时长上限。
 EULER_MODEL_REQUEST_TIMEOUT ?= 5m
@@ -201,6 +197,14 @@ harbor-test-run: harbor-clean
 		trap '$(MAKE) --no-print-directory harbor-clean >/dev/null 2>&1 || true' EXIT; \
 		if [ -z "$${EULER_MODEL_API_KEY:-}" ] && [ -z "$${OPENAI_API_KEY:-}" ]; then \
 			echo "缺少模型密钥：请设置 EULER_MODEL_API_KEY 或 OPENAI_API_KEY" >&2; \
+			exit 1; \
+		fi; \
+		if [ -z "$${EULER_MODEL:-}" ]; then \
+			echo "缺少模型名：请设置 EULER_MODEL" >&2; \
+			exit 1; \
+		fi; \
+		if [ -z "$${EULER_MODEL_BASE_URL:-}" ]; then \
+			echo "缺少模型 API 地址：请设置 EULER_MODEL_BASE_URL" >&2; \
 			exit 1; \
 		fi; \
 		echo "==> 构建容器内 agent 二进制"; \

@@ -90,7 +90,9 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 - `golangci-lint`（提交前检查）
 - `make`：以下 `make` 命令适用于 macOS / Linux；Windows 需用 WSL2 / Git Bash，或直接用 `go run ./cmd/euler` 启动后端、`npm --prefix web run dev` 启动前端
 
-### 1. 启动数据库
+### 步骤
+
+**1. 启动数据库**
 
 ```bash
 docker compose up -d postgres
@@ -98,11 +100,25 @@ docker compose up -d postgres
 
 默认连接串：`postgres://euler:euler@127.0.0.1:5432/euler?sslmode=disable`。
 
-### 2. 配置
+**2. 启动服务**
 
-服务默认从用户主目录下的 `.euler/config.yaml` 读取配置（macOS / Linux 为 `~/.euler/config.yaml`，Windows 为 `%USERPROFILE%\.euler\config.yaml`；不存在则使用默认值，通常无需创建，仅在需要自定义默认值时再建），也可用 `-config` 参数指定其他路径。`make dev-api` 与
-`make dev-restart` 默认使用与 `compose.yaml` 一致的数据库地址，无需手工导出；
-需要指向其他库时用环境变量覆盖：
+```bash
+make start
+```
+
+启动数据库、后端（`http://127.0.0.1:8080`）与前端开发服务器（`http://127.0.0.1:5173`，代理 `/api` 与 `/health` 到后端，热更新）。
+
+**3. 配置模型**
+
+打开控制台 `http://127.0.0.1:5173`，进入「模型配置」页面，填写模型的 Base URL、模型名与 API Key 后保存。Web 控制台的模型配置存在数据库，API Key 也可直接来自环境变量，不落库、不写日志。配好模型后即可创建会话执行任务。
+
+**4. 开始编码**
+
+在控制台新建会话，输入任务描述；Agent 会在工作区读写文件、执行命令，右侧同步展示工具调用与产物。
+
+### 可选配置
+
+通常无需创建配置文件，使用默认值即可。服务默认从用户主目录下的 `.euler/config.yaml` 读取（macOS / Linux 为 `~/.euler/config.yaml`，Windows 为 `%USERPROFILE%\.euler\config.yaml`；不存在则用默认值），也可用 `-config` 参数指定其他路径。`make dev-api` 与 `make dev-restart` 默认使用与 `compose.yaml` 一致的数据库地址，无需手工导出；需要指向其他库时用环境变量覆盖：
 
 ```bash
 # macOS / Linux
@@ -130,12 +146,9 @@ $env:EULER_LANGFUSE_PUBLIC_KEY='pk-...'
 $env:EULER_LANGFUSE_SECRET_KEY='sk-...'
 ```
 
-未配置上述变量则不追踪。E2E 使用独立的配置文件与变量，不会上传追踪数据。启动日志
-出现 `langfuse tracing enabled` 表示生效。
+未配置上述变量则不追踪。E2E 使用独立的配置文件与变量，不会上传追踪数据。启动日志出现 `langfuse tracing enabled` 表示生效。
 
-模型、Base URL 和 API Key 在控制台的「模型配置」里填写；API Key 也可以直接来自环境变量，不会落库或写日志。
-
-### 3. 启动
+### 常用命令
 
 ```bash
 # 一键启动：数据库 + 后端 8080 + 前端 5173
@@ -163,6 +176,8 @@ make dev-reload
 make dev-web
 ```
 
+### 生产构建
+
 生产构建会把前端产物嵌入 Go 二进制：
 
 ```bash
@@ -177,7 +192,7 @@ make build
 .\bin\euler.exe
 ```
 
-### 4. 常用检查
+### 常用检查
 
 ```bash
 make test      # go test ./...（含 internal/api 的 API 测试）
@@ -239,8 +254,14 @@ make test-e2e  # Playwright 端到端测试
 ### 前置条件
 
 - 已安装 `harbor` CLI 与 Docker
-- 设置模型密钥：`EULER_MODEL_API_KEY` 或 `OPENAI_API_KEY`
-- 可选：`EULER_MODEL`（默认 `deepseek-v4-flash`）、`EULER_MODEL_BASE_URL`、`EULER_REASONING_EFFORT`
+- 设置模型密钥：`EULER_MODEL_API_KEY` 或 `OPENAI_API_KEY`（必填）
+- 设置模型信息：`EULER_MODEL`（模型名）与 `EULER_MODEL_BASE_URL`（API 地址）为必填；`EULER_REASONING_EFFORT` 可选（`low` / `medium` / `high` / `max`）
+
+```bash
+export EULER_MODEL_API_KEY='sk-...'
+export EULER_MODEL='your-model-name'
+export EULER_MODEL_BASE_URL='https://api.example.com'
+```
 
 ### 运行方式
 
