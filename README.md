@@ -255,6 +255,16 @@ export EULER_MODEL='your-model-name'
 export EULER_MODEL_BASE_URL='https://api.example.com'
 ```
 
+可选：开启 Langfuse 全链路追踪。请使用无前缀的变量名——任务容器的网络白名单仅识别 `LANGFUSE_HOST` / `LANGFUSE_BASE_URL`，若只用 `EULER_LANGFUSE_*`，容器内将无法访问追踪服务：
+
+```bash
+export LANGFUSE_HOST='https://cloud.langfuse.com'
+export LANGFUSE_PUBLIC_KEY='pk-...'
+export LANGFUSE_SECRET_KEY='sk-...'
+```
+
+未配置则不追踪。
+
 ### 运行方式
 
 ```bash
