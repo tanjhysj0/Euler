@@ -88,6 +88,7 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 - Node.js 20+
 - Docker（本机 Postgres，或使用 `compose.yaml`）
 - `golangci-lint`（提交前检查）
+- `make`：以下 `make` 命令适用于 macOS / Linux；Windows 需用 WSL2 / Git Bash，或直接用 `go run ./cmd/euler` 启动后端、`npm --prefix web run dev` 启动前端
 
 ### 1. 启动数据库
 
@@ -99,27 +100,38 @@ docker compose up -d postgres
 
 ### 2. 配置
 
-服务从 `~/.euler/config.yaml` 读取配置（不存在则使用默认值）。`make dev-api` 与
+服务默认从用户主目录下的 `.euler/config.yaml` 读取配置（macOS / Linux 为 `~/.euler/config.yaml`，Windows 为 `%USERPROFILE%\.euler\config.yaml`；不存在则使用默认值，通常无需创建，仅在需要自定义默认值时再建），也可用 `-config` 参数指定其他路径。`make dev-api` 与
 `make dev-restart` 默认使用与 `compose.yaml` 一致的数据库地址，无需手工导出；
 需要指向其他库时用环境变量覆盖：
 
 ```bash
+# macOS / Linux
 EULER_DATABASE_URL='postgres://user:pass@127.0.0.1:5432/euler?sslmode=disable' make dev-api
+```
+
+```powershell
+# Windows PowerShell
+$env:EULER_DATABASE_URL='postgres://user:pass@127.0.0.1:5432/euler?sslmode=disable'; make dev-api
 ```
 
 可选追踪配置：
 
 ```bash
+# macOS / Linux
 export EULER_LANGFUSE_HOST='https://cloud.langfuse.com'
 export EULER_LANGFUSE_PUBLIC_KEY='pk-...'
 export EULER_LANGFUSE_SECRET_KEY='sk-...'
 ```
 
-`make dev-api` 会在 macOS / Linux 上自动从 `~/.zprofile` 读取 `LANGFUSE_HOST`、
-`LANGFUSE_BASE_URL`、`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`，因此本地用 Web
-界面调试时默认带上追踪；其他平台或未使用 zsh 时请直接在当前 shell 导出这些变量。
-未配置则不追踪。E2E 使用独立的配置文件与变量，不会上传追踪数据。启动日志出现
-`langfuse tracing enabled` 表示生效。
+```powershell
+# Windows PowerShell
+$env:EULER_LANGFUSE_HOST='https://cloud.langfuse.com'
+$env:EULER_LANGFUSE_PUBLIC_KEY='pk-...'
+$env:EULER_LANGFUSE_SECRET_KEY='sk-...'
+```
+
+未配置上述变量则不追踪。E2E 使用独立的配置文件与变量，不会上传追踪数据。启动日志
+出现 `langfuse tracing enabled` 表示生效。
 
 模型、Base URL 和 API Key 在控制台的「模型配置」里填写；API Key 也可以直接来自环境变量，不会落库或写日志。
 
@@ -154,8 +166,15 @@ make dev-web
 生产构建会把前端产物嵌入 Go 二进制：
 
 ```bash
-make build     # 构建 bin/euler
+# macOS / Linux
+make build
 ./bin/euler
+```
+
+```powershell
+# Windows
+make build
+.\bin\euler.exe
 ```
 
 ### 4. 常用检查
@@ -167,14 +186,14 @@ make web-test  # 前端单测
 make test-e2e  # Playwright 端到端测试
 ```
 
-## 配置参考
+## 配置参考（可选）
 
-`~/.euler/config.yaml` 支持以下字段（均可省略）：
+仅在需要覆盖内置默认值时，才创建用户主目录下的 `.euler/config.yaml`（或用 `-config` 指定其他文件）。支持以下字段（均可省略）：
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
 | `listen` | `127.0.0.1:8080` | 仅允许 loopback 地址 |
-| `workspace_root` | `~/EulerWorkspaces` | 工作区根目录 |
+| `workspace_root` | 用户主目录下的 `EulerWorkspaces` | 工作区根目录 |
 | `allowed_origins` | 空 | 额外允许的 Origin |
 | `agent.max_model_rounds` | `0` | 模型轮次上限，`0` 表示不限制 |
 | `agent.max_tool_calls` | `0` | 工具调用次数上限，`0` 表示不限制 |

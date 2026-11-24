@@ -88,19 +88,13 @@ test-e2e:
 # 真实模型冒烟：真实 DeepSeek + 真实数据库，只跑 1 个端到端用例，
 # 用于验证 mock E2E 覆盖不到的流式响应与真实工具调用。
 test-smoke:
-	@if [ -z "$${OPENAI_API_KEY:-}" ] && [ -f "$$HOME/.zprofile" ]; then \
-		set -a; . "$$HOME/.zprofile" >/dev/null 2>&1 || true; set +a; \
-	fi; \
-	test -n "$${OPENAI_API_KEY:-}" || (echo "缺少 OPENAI_API_KEY" >&2; exit 1); \
+	@test -n "$${OPENAI_API_KEY:-}" || (echo "缺少 OPENAI_API_KEY" >&2; exit 1); \
 	OPENAI_API_KEY="$${OPENAI_API_KEY}" npm --prefix web run test:smoke
 
 # 本地调试服务：手工用 Web 界面测试时默认开启 Langfuse 追踪，
 # 未配置密钥时静默跳过。E2E 使用自己的配置文件与变量，不受影响。
 dev-api:
-	@if [ -z "$${LANGFUSE_SECRET_KEY:-}" ] && [ -f "$$HOME/.zprofile" ]; then \
-		set -a; . "$$HOME/.zprofile" >/dev/null 2>&1 || true; set +a; \
-	fi; \
-	EULER_DATABASE_URL='$(EULER_DATABASE_URL)' \
+	@EULER_DATABASE_URL='$(EULER_DATABASE_URL)' \
 		go run ./cmd/euler $(if $(EULER_CONFIG),-config $(EULER_CONFIG),)
 
 # 重启本地调试服务：停掉占用端口上的旧进程，再用当前代码重新启动。
@@ -108,9 +102,6 @@ dev-api:
 dev-restart:
 	@pid=$$(lsof -nP -iTCP:$(EULER_PORT) -sTCP:LISTEN -t 2>/dev/null | head -1); \
 	if [ -n "$$pid" ]; then echo "停止旧服务 (pid $$pid)"; kill "$$pid"; sleep 1; fi; \
-	if [ -z "$${LANGFUSE_SECRET_KEY:-}" ] && [ -f "$$HOME/.zprofile" ]; then \
-		set -a; . "$$HOME/.zprofile" >/dev/null 2>&1 || true; set +a; \
-	fi; \
 	EULER_DATABASE_URL='$(EULER_DATABASE_URL)' \
 		nohup go run ./cmd/euler $(if $(EULER_CONFIG),-config $(EULER_CONFIG),) \
 		> /tmp/euler-dev.log 2>&1 & \
@@ -208,9 +199,6 @@ harbor-clean:
 harbor-test-run: harbor-clean
 	@set -e; \
 		trap '$(MAKE) --no-print-directory harbor-clean >/dev/null 2>&1 || true' EXIT; \
-		if [ -z "$${LANGFUSE_SECRET_KEY:-}" ] && [ -f "$$HOME/.zprofile" ]; then \
-			set -a; . "$$HOME/.zprofile" >/dev/null 2>&1 || true; set +a; \
-		fi; \
 		if [ -z "$${EULER_MODEL_API_KEY:-}" ] && [ -z "$${OPENAI_API_KEY:-}" ]; then \
 			echo "缺少模型密钥：请设置 EULER_MODEL_API_KEY 或 OPENAI_API_KEY" >&2; \
 			exit 1; \
