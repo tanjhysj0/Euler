@@ -84,11 +84,20 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 
 ### 依赖
 
+**构建与运行必需**：
+
 - Go 1.26+
 - Node.js 20+
-- Docker（本机 Postgres，或使用 `compose.yaml`）
-- `golangci-lint`（提交前检查）
-- `make`：以下 `make` 命令适用于 macOS / Linux；Windows 需用 WSL2 / Git Bash，或直接用 `go run ./cmd/euler` 启动后端、`npm --prefix web run dev` 启动前端
+- Docker 24+（需 compose v2 插件，即 `docker compose` 子命令，不是旧版 `docker-compose`；macOS Docker Desktop 自带，Linux 上需额外安装 `docker-compose-plugin`）
+- GNU Make
+
+**开发检查（可选）**：
+
+- `golangci-lint`（`make lint`、提交前检查）
+
+**平台备注**：
+
+`make` target 内部使用 `lsof` / `nohup` / `grep` / `sed` / `awk` / `find` / `kill` 等 Unix 工具。Windows 原生环境（cmd / PowerShell）无法直接执行，需使用 WSL2 / Git Bash / MSYS2，或绕过 make 直接跑 `go run ./cmd/euler` 启动后端、`npm --prefix web run dev` 启动前端。
 
 ### 步骤
 
