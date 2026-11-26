@@ -9,7 +9,7 @@ import (
 )
 
 func TestLoadDefaults(t *testing.T) {
-	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	t.Setenv("EULER_DATABASE_URL", "/tmp/euler-config-test.db")
 	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +33,7 @@ func TestLoadDefaults(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidLimits(t *testing.T) {
-	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	t.Setenv("EULER_DATABASE_URL", "/tmp/euler-config-test.db")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	body := []byte("agent:\n  max_model_rounds: -1\n  max_tool_calls: -1\n" +
 		"  max_duration: 10m\n  max_output_bytes: 65536\n")
@@ -46,7 +46,7 @@ func TestLoadRejectsInvalidLimits(t *testing.T) {
 }
 
 func TestLoadParsesAgentDuration(t *testing.T) {
-	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	t.Setenv("EULER_DATABASE_URL", "/tmp/euler-config-test.db")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("agent:\n  max_duration: 15m\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestLoadParsesAgentDuration(t *testing.T) {
 }
 
 func TestLoadRejectsUnknownReasoningEffort(t *testing.T) {
-	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	t.Setenv("EULER_DATABASE_URL", "/tmp/euler-config-test.db")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("model_reasoning_effort: turbo\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestLoadRejectsUnknownReasoningEffort(t *testing.T) {
 }
 
 func TestLoadRejectsRelativeShellPathPrefix(t *testing.T) {
-	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	t.Setenv("EULER_DATABASE_URL", "/tmp/euler-config-test.db")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("shell_path_prefix: runtime/bin\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func clearLangfuseEnv(t *testing.T) {
 
 func TestLoadParsesLangfuse(t *testing.T) {
 	clearLangfuseEnv(t)
-	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	t.Setenv("EULER_DATABASE_URL", "/tmp/euler-config-test.db")
 	t.Setenv("EULER_LANGFUSE_SECRET_KEY", "sk-lf-test")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	body := "langfuse:\n  host: https://cloud.langfuse.com\n  public_key: pk-lf-test\n"
@@ -113,7 +113,7 @@ func TestLoadParsesLangfuse(t *testing.T) {
 
 func TestLoadLangfuseFromEnvironment(t *testing.T) {
 	clearLangfuseEnv(t)
-	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	t.Setenv("EULER_DATABASE_URL", "/tmp/euler-config-test.db")
 	t.Setenv("LANGFUSE_BASE_URL", "https://jp.cloud.langfuse.com")
 	t.Setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
 	t.Setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
@@ -128,7 +128,7 @@ func TestLoadLangfuseFromEnvironment(t *testing.T) {
 
 func TestLoadRejectsIncompleteLangfuse(t *testing.T) {
 	clearLangfuseEnv(t)
-	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	t.Setenv("EULER_DATABASE_URL", "/tmp/euler-config-test.db")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("langfuse:\n  host: https://cloud.langfuse.com\n"),
 		0o600); err != nil {
@@ -141,7 +141,7 @@ func TestLoadRejectsIncompleteLangfuse(t *testing.T) {
 
 func TestLoadRejectsLangfuseHostWithoutScheme(t *testing.T) {
 	clearLangfuseEnv(t)
-	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	t.Setenv("EULER_DATABASE_URL", "/tmp/euler-config-test.db")
 	t.Setenv("EULER_LANGFUSE_SECRET_KEY", "sk-lf-test")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	body := "langfuse:\n  host: cloud.langfuse.com\n  public_key: pk-lf-test\n"
@@ -153,15 +153,28 @@ func TestLoadRejectsLangfuseHostWithoutScheme(t *testing.T) {
 	}
 }
 
-func TestLoadRequiresDatabaseURL(t *testing.T) {
+func TestLoadDefaultsDatabaseURL(t *testing.T) {
 	t.Setenv("EULER_DATABASE_URL", "")
-	if _, err := Load(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
-		t.Fatal("expected missing database URL error")
+	t.Setenv("EULER_DATABASE_DRIVER", "")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("零配置应能加载成功，得到错误：%v", err)
+	}
+	wantURL := filepath.Join(home, ".euler", "euler.db")
+	if cfg.DatabaseURL != wantURL {
+		t.Fatalf("DatabaseURL=%q，期望默认 %q", cfg.DatabaseURL, wantURL)
+	}
+	if cfg.DatabaseDriver != "sqlite" {
+		t.Fatalf("DatabaseDriver=%q，期望默认 sqlite", cfg.DatabaseDriver)
 	}
 }
 
 func TestLoadRejectsNonLoopbackListen(t *testing.T) {
-	t.Setenv("EULER_DATABASE_URL", "postgres://euler:euler@127.0.0.1/euler?sslmode=disable")
+	t.Setenv("EULER_DATABASE_URL", "/tmp/euler-config-test.db")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("listen: 0.0.0.0:8080\n"), 0o600); err != nil {
 		t.Fatal(err)

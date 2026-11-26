@@ -68,6 +68,7 @@ type Config struct {
 	WorkspaceRoot       string         `yaml:"workspace_root"`
 	AllowedOrigins      []string       `yaml:"allowed_origins"`
 	DatabaseURL         string         `yaml:"-"`
+	DatabaseDriver      string         `yaml:"-"`
 	Langfuse            LangfuseConfig `yaml:"langfuse"`
 	Agent               AgentLimits    `yaml:"agent"`
 	ShellTimeout        time.Duration  `yaml:"shell_timeout"`
@@ -81,6 +82,21 @@ type Config struct {
 	// 为空时使用默认的 coding 模板。
 	SystemPromptTemplate string `yaml:"system_prompt_template"`
 	PreviewBytes         int    `yaml:"preview_bytes"`
+}
+
+// resolveDatabaseDriver 决定使用哪种数据库方言。
+// 优先 EULER_DATABASE_DRIVER 环境变量；留空时从 databaseURL 推断：
+//   - "postgres://" 或 "postgresql://" 前缀 → postgres
+//   - 其他（文件路径、file: URI）→ sqlite
+func resolveDatabaseDriver(databaseURL string) string {
+	if driver := os.Getenv("EULER_DATABASE_DRIVER"); driver != emptyValue {
+		return driver
+	}
+	if strings.HasPrefix(databaseURL, "postgres://") ||
+		strings.HasPrefix(databaseURL, "postgresql://") {
+		return "postgres"
+	}
+	return "sqlite"
 }
 
 // Load 在内置默认值之上读取 path 指定的文件，从 EULER_DATABASE_URL
@@ -104,8 +120,11 @@ func Load(path string) (Config, error) {
 	}
 	cfg.DatabaseURL = os.Getenv("EULER_DATABASE_URL")
 	if cfg.DatabaseURL == emptyValue {
-		return Config{}, errors.New("EULER_DATABASE_URL is required")
+		// 零配置启动：未显式指定时默认使用用户主目录下的 SQLite 单文件，
+		// 父目录由 SQLite 方言的 Prepare 在打开前自动创建。
+		cfg.DatabaseURL = filepath.Join(home, ".euler", "euler.db")
 	}
+	cfg.DatabaseDriver = resolveDatabaseDriver(cfg.DatabaseURL)
 	cfg.loadLangfuseEnv()
 	if err = cfg.validate(); err != nil {
 		return Config{}, err

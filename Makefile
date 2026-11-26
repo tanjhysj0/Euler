@@ -5,8 +5,17 @@ EULER_PORT ?= 8080
 # 前端开发服务器端口，与 vite.config.ts 的 server.port 保持一致。
 WEB_PORT ?= 5173
 EULER_CONFIG ?=
-# 本地开发库地址，默认与 compose.yaml 的凭据一致；同名环境变量优先。
+# 数据库方言：sqlite（默认，单文件，无需服务）或 postgres（需 docker compose 起服务）。
+# 同名环境变量优先；留空时由 config 从 EULER_DATABASE_URL 的 scheme 推断。
+EULER_DATABASE_DRIVER ?= sqlite
+# 本地开发库地址：默认值随方言变化；同名环境变量优先。
+#   - sqlite:   单文件，默认 ~/.euler/euler.db
+#   - postgres: docker compose 提供的本地实例
+ifeq ($(EULER_DATABASE_DRIVER),postgres)
 EULER_DATABASE_URL ?= postgres://euler:euler@127.0.0.1:5432/euler?sslmode=disable
+else
+EULER_DATABASE_URL ?= $(HOME)/.euler/euler.db
+endif
 
 # Harbor 评测的模型请求超时预算；可用同名环境变量覆盖。
 EULER_MODEL_TIMEOUT ?= 10s
@@ -90,7 +99,8 @@ test-smoke:
 # 本地调试服务：手工用 Web 界面测试时默认开启 Langfuse 追踪，
 # 未配置密钥时静默跳过。E2E 使用自己的配置文件与变量，不受影响。
 dev-api:
-	@EULER_DATABASE_URL='$(EULER_DATABASE_URL)' \
+	@EULER_DATABASE_DRIVER='$(EULER_DATABASE_DRIVER)' \
+		EULER_DATABASE_URL='$(EULER_DATABASE_URL)' \
 		go run ./cmd/euler $(if $(EULER_CONFIG),-config $(EULER_CONFIG),)
 
 # 重启本地调试服务：停掉占用端口上的旧进程，再用当前代码重新启动。
@@ -98,7 +108,8 @@ dev-api:
 dev-restart:
 	@pid=$$(lsof -nP -iTCP:$(EULER_PORT) -sTCP:LISTEN -t 2>/dev/null | head -1); \
 	if [ -n "$$pid" ]; then echo "停止旧服务 (pid $$pid)"; kill "$$pid"; sleep 1; fi; \
-	EULER_DATABASE_URL='$(EULER_DATABASE_URL)' \
+	EULER_DATABASE_DRIVER='$(EULER_DATABASE_DRIVER)' \
+		EULER_DATABASE_URL='$(EULER_DATABASE_URL)' \
 		nohup go run ./cmd/euler $(if $(EULER_CONFIG),-config $(EULER_CONFIG),) \
 		> /tmp/euler-dev.log 2>&1 & \
 	for i in $$(seq 1 60); do \
@@ -116,10 +127,13 @@ dev-restart:
 # 前端有改动时使用：重新构建嵌入产物后再重启后端，避免 UI 仍是旧 dist。
 dev-reload: web-build dev-restart
 
-# 启动本地开发数据库（compose 中的 postgres）；重复执行是幂等的，
-# --wait 会等到 healthcheck 通过，避免后端先于数据库就绪。
+# SQLite 是单文件数据库，没有独立服务进程；postgres 模式用 docker compose 起服务。
 dev-db-up:
-	@docker compose up -d --wait postgres
+ifeq ($(EULER_DATABASE_DRIVER),postgres)
+	@docker compose up -d postgres
+else
+	@echo "SQLite 无需启动数据库服务"
+endif
 
 # 数据库、后端（8080）与 Vite 开发服务器（5173）一起启动/重启。
 dev-restart-all: dev-db-up dev-restart dev-web-restart
@@ -157,15 +171,21 @@ dev-web-stop:
 	if [ -n "$$pid" ]; then kill "$$pid" && echo "已停止前端 (pid $$pid)"; \
 	else echo "端口 $(WEB_PORT) 上没有运行中的前端"; fi
 
-# 停止数据库；容器尚未创建时也视为成功，保证 make stop 能完整执行。
+# SQLite 无需停止数据库服务；postgres 模式停止容器。
 dev-db-stop:
-	@docker compose stop postgres >/dev/null 2>&1 || true
-	@echo "数据库已停止"
+ifeq ($(EULER_DATABASE_DRIVER),postgres)
+	@docker compose stop postgres
+else
+	@echo "SQLite 无需停止数据库服务"
+endif
 
-# 重启数据库，并等待 healthcheck 通过后再返回。
+# SQLite 无需重启数据库服务；postgres 模式重启容器。
 dev-db-restart:
+ifeq ($(EULER_DATABASE_DRIVER),postgres)
 	@docker compose restart postgres
-	@docker compose up -d --wait postgres
+else
+	@echo "SQLite 无需重启数据库服务"
+endif
 
 # 一键启动：数据库 + 后端（8080）+ 前端（5173）；已在运行的服务会先停止再启动。
 start: dev-db-up dev-restart dev-web-restart

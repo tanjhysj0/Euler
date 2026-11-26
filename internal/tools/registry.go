@@ -303,8 +303,9 @@ func cappedList[T any](r *Registry, key string, items []T) map[string]any {
 	return payload
 }
 
-// jsonbSafe 将转义的 NUL 序列改写为转义的替换字符：
-// PostgreSQL jsonb 拒绝存储文档中的 NUL 转义。
+// jsonbSafe 将转义的 NUL 序列改写为转义的替换字符。
+// 历史上 PostgreSQL jsonb 拒绝存储 NUL 转义；SQLite 的 TEXT 列虽可存储，
+// 这里仍做同样的清洗，保证跨后端的行为一致。
 func jsonbSafe(data []byte) []byte {
 	return bytes.ReplaceAll(data, []byte("\\u0000"), []byte("\\ufffd"))
 }

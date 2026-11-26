@@ -43,7 +43,7 @@ Euler 是一个本地优先的编码 Agent 工作台：由 Go 后端、React 控
                         ┌─────────────────────────┼─────────────────────────┐
                         ▼                         ▼                         ▼
                  run.Manager              agent.Runtime               持久化 / 追踪
-            状态机、并发、取消、恢复      Eino ReAct + 工具 + 模型      Postgres / Langfuse
+            状态机、并发、取消、恢复      Eino ReAct + 工具 + 模型      SQLite/PG / Langfuse
                                                   │
                                                   ▼
                                         file_* / shell / submit
@@ -76,7 +76,7 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 | `internal/tracing` | Langfuse 追踪 |
 | `web/` | React 控制台（Vite + Ant Design + TanStack Query + Zustand） |
 | `harbor_eval/` | Harbor Agent、任务清单、筛选脚本与运行结果 |
-| `migrations/` | Postgres SQL 迁移 |
+| `migrations/` | SQL 迁移（按方言分目录：`sqlite/`、`postgres/`） |
 | `docs/` | 设计文档、数据结构说明与实现计划 |
 | `docs/assets/` | README 演示素材（`demo.mp4` 与内嵌预览 `demo.gif`） |
 
@@ -107,7 +107,7 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 make start
 ```
 
-自动拉起数据库（Postgres，默认连接串 `postgres://euler:euler@127.0.0.1:5432/euler?sslmode=disable`）、后端（`http://127.0.0.1:8080`）与前端开发服务器（`http://127.0.0.1:5173`，代理 `/api` 与 `/health` 到后端，热更新）。若只单独启动后端（`make dev-api`），需先 `make dev-db-up` 把数据库拉起来。
+自动拉起后端（`http://127.0.0.1:8080`）与前端开发服务器（`http://127.0.0.1:5173`，代理 `/api` 与 `/health` 到后端，热更新）。默认数据库使用 SQLite 单文件（`~/.euler/euler.db`），服务启动时自动执行 `migrations/sqlite/` 下的迁移建表，无需单独启动数据库容器；单独启动后端用 `make dev-api` 即可。如需切换到 PostgreSQL，见下方「多数据库支持」。
 
 **2. 配置模型**
 
@@ -119,17 +119,47 @@ make start
 
 ### 可选配置
 
-通常无需创建配置文件，使用默认值即可。服务默认从用户主目录下的 `.euler/config.yaml` 读取（macOS / Linux 为 `~/.euler/config.yaml`，Windows 为 `%USERPROFILE%\.euler\config.yaml`；不存在则用默认值），也可用 `-config` 参数指定其他路径。`make dev-api` 与 `make dev-restart` 默认使用与 `compose.yaml` 一致的数据库地址，无需手工导出；需要指向其他库时用环境变量覆盖：
+通常无需创建配置文件，使用默认值即可。服务默认从用户主目录下的 `.euler/config.yaml` 读取（macOS / Linux 为 `~/.euler/config.yaml`，Windows 为 `%USERPROFILE%\.euler\config.yaml`；不存在则用默认值），也可用 `-config` 参数指定其他路径。`make dev-api` 与 `make dev-restart` 默认使用 SQLite（`~/.euler/euler.db`），无需手工导出；需要指向其他库文件时用环境变量覆盖：
 
 ```bash
 # macOS / Linux
-EULER_DATABASE_URL='postgres://user:pass@127.0.0.1:5432/euler?sslmode=disable' make dev-api
+EULER_DATABASE_URL='/path/to/euler.db' make dev-api
 ```
 
 ```powershell
 # Windows PowerShell
-$env:EULER_DATABASE_URL='postgres://user:pass@127.0.0.1:5432/euler?sslmode=disable'; make dev-api
+$env:EULER_DATABASE_URL='/path/to/euler.db'; make dev-api
 ```
+
+### 多数据库支持
+
+Euler 的数据库访问基于 `internal/persistence.Dialect` 接口抽象，遵循开闭原则：**新增数据库只需实现接口并在 `init` 中注册，无需修改任何现有文件**。当前内置两种方言：
+
+| 方言 | 驱动 | 迁移目录 | 连接池 | 大小写不敏感 LIKE | 工作区锁 |
+|---|---|---|---|---|---|
+| `sqlite`（默认） | `glebarez/sqlite`（纯 Go） | `migrations/sqlite/` | 单连接 | `LIKE` | UNIQUE 约束 + 冲突重试 |
+| `postgres` | `gorm.io/driver/postgres`（pgx） | `migrations/postgres/` | 多连接 | `ILIKE` | `pg_advisory_xact_lock` |
+
+**切换到 PostgreSQL**：
+
+```bash
+# 启动 PG 容器并以后端连 PG 的方式启动服务
+make start EULER_DATABASE_DRIVER=postgres
+
+# 或分步：
+make dev-db-up EULER_DATABASE_DRIVER=postgres   # docker compose 起 PG
+make dev-api   EULER_DATABASE_DRIVER=postgres   # 后端连 PG
+```
+
+方言选择优先级：`EULER_DATABASE_DRIVER` 环境变量 > 从 `EULER_DATABASE_URL` 的 scheme 推断（`postgres://` → postgres，否则 sqlite）> 默认 `sqlite`。
+
+**添加新数据库**（如 MySQL）：
+
+1. 新建 `internal/persistence/dialect_mysql.go`，实现 `Dialect` 接口，并在 `init()` 中 `Register("mysql", ...)`；
+2. 新建 `migrations/mysql/` 目录，放入该方言的迁移 SQL；
+3. 用 `EULER_DATABASE_DRIVER=mysql` 启动即可。
+
+无需修改 `db.go`、`session`、`run` 等任何现有文件。
 
 可选追踪配置：
 

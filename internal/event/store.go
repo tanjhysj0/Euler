@@ -15,7 +15,7 @@ import (
 	"euler/internal/persistence"
 )
 
-// Store 是基于 PostgreSQL 的事件存储。
+// Store 是基于 SQLite 的事件存储。
 type Store struct {
 	db  *gorm.DB
 	hub *Hub

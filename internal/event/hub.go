@@ -46,7 +46,7 @@ func (h *Hub) Subscribe(runID uuid.UUID) (<-chan Event, func()) {
 }
 
 // Publish 以非阻塞方式将 item 投递给每个在线订阅者。缓冲区已满的订阅者
-// 会被关闭并移除，使其可以凭最后的序号从 PostgreSQL 重新接续。
+// 会被关闭并移除，使其可以凭最后的序号从数据库重新接续。
 func (h *Hub) Publish(item Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

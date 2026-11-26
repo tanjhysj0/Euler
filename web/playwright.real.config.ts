@@ -19,18 +19,17 @@ export default defineConfig({
   },
   webServer: [
     {
-      // 每次重建前端并重置 euler_test，确保真实模型跑在与 mock E2E 相同的环境上。
+      // 每次重建前端并删除 SQLite 测试库文件，确保真实模型跑在与 mock E2E 相同的环境上。
       command:
         'npm --prefix web run build && ' +
-        'docker compose exec -T postgres psql -U euler -d euler_test ' +
-        '-c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" && ' +
+        'rm -f /tmp/euler-e2e.db && ' +
         'go run ./cmd/euler -config web/tests/euler-e2e.yaml',
       cwd: path.resolve(configDir, '..'),
       url: 'http://127.0.0.1:18080/health',
       timeout: 120_000,
       reuseExistingServer: false,
       env: {
-        EULER_DATABASE_URL: 'postgres://euler:euler@127.0.0.1:5432/euler_test?sslmode=disable',
+        EULER_DATABASE_URL: '/tmp/euler-e2e.db',
         OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? '',
       },
     },

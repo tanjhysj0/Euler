@@ -10,11 +10,11 @@ import (
 
 func TestMigrationsDirPrefersWorkingDirectory(t *testing.T) {
 	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, "migrations"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "migrations", "sqlite"), 0o755))
 	t.Chdir(root)
-	dir, err := migrationsDir()
+	dir, err := migrationsDir("migrations/sqlite")
 	require.NoError(t, err)
-	want, err := filepath.EvalSymlinks(filepath.Join(root, "migrations"))
+	want, err := filepath.EvalSymlinks(filepath.Join(root, "migrations", "sqlite"))
 	require.NoError(t, err)
 	got, err := filepath.EvalSymlinks(dir)
 	require.NoError(t, err)
@@ -23,6 +23,6 @@ func TestMigrationsDirPrefersWorkingDirectory(t *testing.T) {
 
 func TestMigrationsDirMissingReturnsError(t *testing.T) {
 	t.Chdir(t.TempDir())
-	_, err := migrationsDir()
+	_, err := migrationsDir("migrations/nonexistent")
 	require.Error(t, err)
 }

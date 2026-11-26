@@ -1040,6 +1040,15 @@ linters:
       #            关闭：只跑上面 enable 列出的，fieldalignment 已全局禁用。
       enable-all: false
 
+      # disable — 约束：从 govet 默认分析器集中关闭的项。
+      #           inline：golangci-lint v2 额外纳入的 govet 分析器（标准
+      #           `go vet` 默认并不运行它），会对任何 `reflect.Ptr` 常量
+      #           引用报 "Constant reflect.Ptr should be inlined"，且没有
+      #           合理的代码级修复（改用局部变量只会把告警移到声明处）。
+      #           反射代码比较 Kind 本就必须引用这些常量，属于误报，故关闭。
+      disable:
+        - inline
+
     # ============== depguard：包导入反向约束 ==============
     # 兑底 ADR-012 决策 4「entry-handler-only 原则的 lint 兑底」。
     # 原则全文：c.JSON / c.String / c.Status 等响应序列化只能出现在

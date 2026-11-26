@@ -344,13 +344,15 @@ func newCommittedSessionService(t *testing.T) (*Service, *gorm.DB) {
 	t.Helper()
 	databaseURL := os.Getenv(testDatabaseURLEnv)
 	if databaseURL == "" {
-		t.Fatalf("%s is required for integration tests", testDatabaseURLEnv)
+		// 未指定共享测试库时，使用每个测试独立的临时 SQLite 文件，
+		// 无需外部数据库服务，测试间完全隔离。
+		databaseURL = filepath.Join(t.TempDir(), "test.db")
 	}
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	require.NoError(t, err)
 	t.Chdir(repoRoot)
-	require.NoError(t, persistence.Migrate(databaseURL))
-	db, err := persistence.Open(context.Background(), databaseURL)
+	require.NoError(t, persistence.Migrate("", databaseURL))
+	db, err := persistence.Open(context.Background(), "", databaseURL)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		sqlDB, dbErr := db.DB()
@@ -364,13 +366,15 @@ func newSessionServiceWithRoot(t *testing.T) (*Service, *gorm.DB, string) {
 	t.Helper()
 	databaseURL := os.Getenv(testDatabaseURLEnv)
 	if databaseURL == "" {
-		t.Fatalf("%s is required for integration tests", testDatabaseURLEnv)
+		// 未指定共享测试库时，使用每个测试独立的临时 SQLite 文件，
+		// 无需外部数据库服务，测试间完全隔离。
+		databaseURL = filepath.Join(t.TempDir(), "test.db")
 	}
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	require.NoError(t, err)
 	t.Chdir(repoRoot)
-	require.NoError(t, persistence.Migrate(databaseURL))
-	db, err := persistence.Open(context.Background(), databaseURL)
+	require.NoError(t, persistence.Migrate("", databaseURL))
+	db, err := persistence.Open(context.Background(), "", databaseURL)
 	require.NoError(t, err)
 	tx := db.Begin()
 	require.NoError(t, tx.Error)

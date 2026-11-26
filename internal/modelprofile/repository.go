@@ -20,7 +20,7 @@ type Repository interface {
 	Get(ctx context.Context, id uuid.UUID) (persistence.ModelProfile, error)
 }
 
-// GormRepository 将模型配置存储在 PostgreSQL 中。
+// GormRepository 将模型配置存储在 SQLite 中。
 type GormRepository struct {
 	db *gorm.DB
 }

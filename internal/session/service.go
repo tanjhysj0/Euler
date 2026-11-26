@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"euler/internal/persistence"
 	"euler/internal/workspace"
@@ -55,11 +54,19 @@ type ListFilter struct {
 type Service struct {
 	db         *gorm.DB
 	workspaces *workspace.Service
+	dialect    persistence.Dialect
 }
 
 // NewService 基于 db 和工作区目录辅助服务构建 Service。
+// 方言通过 persistence.FromGorm 反查，调用方无需显式传入。
 func NewService(db *gorm.DB, workspaces *workspace.Service) *Service {
-	return &Service{db: db, workspaces: workspaces}
+	dialect, err := persistence.FromGorm(db)
+	if err != nil {
+		// persistence.Open 已保证方言已注册；走到这里说明 db 不是通过
+		// Open 创建的，属于调用方编程错误。
+		panic(fmt.Sprintf("session.NewService: %v", err))
+	}
+	return &Service{db: db, workspaces: workspaces, dialect: dialect}
 }
 
 // Create 准备工作区目录、存储会话，并报告同一路径上的其他会话
@@ -148,10 +155,7 @@ func (s *Service) insert(
 		if err != nil {
 			return err
 		}
-		if err = lockWorkspacePath(tx, path); err != nil {
-			return err
-		}
-		workspaceRow, err := lockOrCreateWorkspace(tx, path)
+		workspaceRow, err := s.dialect.EnsureWorkspace(tx, path)
 		if err != nil {
 			return err
 		}
@@ -193,7 +197,8 @@ func (s *Service) listQuery(ctx context.Context, filter ListFilter) (*gorm.DB, e
 		Joins("JOIN model_profiles ON model_profiles.id = sessions.model_profile_id").
 		Order("sessions.last_active_at DESC")
 	if filter.Query != emptyString {
-		query = query.Where("sessions.title ILIKE ?", "%"+filter.Query+"%")
+		likeOp := s.dialect.CaseInsensitiveLike()
+		query = query.Where("sessions.title "+likeOp+" ?", "%"+filter.Query+"%")
 	}
 	path, err := s.filterPath(filter.WorkspacePath)
 	if err != nil {
@@ -279,35 +284,6 @@ func loadProfile(tx *gorm.DB, id uuid.UUID) (persistence.ModelProfile, error) {
 		return persistence.ModelProfile{}, fmt.Errorf("load model profile: %w", err)
 	}
 	return profile, nil
-}
-
-func lockWorkspacePath(tx *gorm.DB, path string) error {
-	// 不同路径的哈希键可能碰撞，这只会让不相关的创建操作被串行化，
-	// 绝不会削弱正确性。
-	err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", path).Error
-	if err != nil {
-		return fmt.Errorf("lock workspace path: %w", err)
-	}
-	return nil
-}
-
-func lockOrCreateWorkspace(tx *gorm.DB, path string) (persistence.Workspace, error) {
-	var row persistence.Workspace
-	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("path = ?", path).
-		First(&row).Error
-	switch {
-	case err == nil:
-		return row, nil
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		row = persistence.Workspace{ID: uuid.New(), Path: path}
-		if createErr := tx.Create(&row).Error; createErr != nil {
-			return persistence.Workspace{}, fmt.Errorf("create workspace: %w", createErr)
-		}
-		return row, nil
-	default:
-		return persistence.Workspace{}, fmt.Errorf("lock workspace: %w", err)
-	}
 }
 
 func hasOtherActiveRun(tx *gorm.DB, workspaceID, sessionID uuid.UUID) (bool, error) {

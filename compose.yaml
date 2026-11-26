@@ -1,19 +1,31 @@
+# Euler 支持多种数据库方言（见 internal/persistence/dialect.go）。
+#
+# 默认使用 SQLite 单文件数据库（~/.euler/euler.db），无需任何服务进程，
+# 本文件的 postgres 服务不会被启动。
+#
+# 仅当 EULER_DATABASE_DRIVER=postgres 时才需要本文件：
+#   make dev-db-up EULER_DATABASE_DRIVER=postgres   # 启动下方 postgres 服务
+#   make dev-api   EULER_DATABASE_DRIVER=postgres   # 后端连 PG
+#
+# Harbor 评测等其他基于 docker compose 的流程使用各自目录下的 compose 文件，
+# 与本文件无关。
+
 services:
   postgres:
-    image: postgres:17
+    image: postgres:16-alpine
     environment:
-      POSTGRES_DB: euler
       POSTGRES_USER: euler
       POSTGRES_PASSWORD: euler
+      POSTGRES_DB: euler
     ports:
       - "5432:5432"
     volumes:
-      - euler-postgres:/var/lib/postgresql/data
+      - euler-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U euler"]
+      test: ["CMD-SHELL", "pg_isready -U euler -d euler"]
       interval: 5s
-      timeout: 5s
+      timeout: 3s
       retries: 10
 
 volumes:
-  euler-postgres:
+  euler-pgdata:

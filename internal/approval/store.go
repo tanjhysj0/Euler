@@ -42,7 +42,7 @@ const (
 	decisionAbsent = 0
 )
 
-// DBStore 将审批及其所辖的工具调用与运行状态持久化到 PostgreSQL。
+// DBStore 将审批及其所辖的工具调用与运行状态持久化到 SQLite。
 // 状态与事件共享同一个事务，因此已提交的决策始终可回放；
 // 调用方只在提交后才发布事件。
 type DBStore struct{ db *gorm.DB }
@@ -196,7 +196,7 @@ func newApprovalRow(request Request) (persistence.Approval, error) {
 // lockRunForApproval 先不加锁地读取审批所属的运行，再在锁定审批本身
 // 之前锁定运行行。所有涉及运行及其审批的事务必须按
 // run → approval → tool call 的顺序加锁：run.Finish/Cancel 先锁运行，
-// 若这里先锁审批就会颠倒顺序，可能导致死锁（PostgreSQL 40P01）。
+// 若这里先锁审批就会颠倒顺序，可能导致死锁（SQLite 下表现为写锁超时）。
 func lockRunForApproval(tx *gorm.DB, id uuid.UUID) error {
 	var approval persistence.Approval
 	err := tx.Select("run_id").First(&approval, queryByID, id).Error

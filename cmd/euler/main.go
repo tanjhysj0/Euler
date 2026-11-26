@@ -62,10 +62,10 @@ func serve(configPath string) error {
 	if err = workspace.NewService(cfg.WorkspaceRoot).EnsureRoot(); err != nil {
 		return fmt.Errorf("prepare workspace root: %w", err)
 	}
-	if err = persistence.Migrate(cfg.DatabaseURL); err != nil {
+	if err = persistence.Migrate(cfg.DatabaseDriver, cfg.DatabaseURL); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
-	db, err := persistence.Open(context.Background(), cfg.DatabaseURL)
+	db, err := persistence.Open(context.Background(), cfg.DatabaseDriver, cfg.DatabaseURL)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

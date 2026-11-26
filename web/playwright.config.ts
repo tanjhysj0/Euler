@@ -5,7 +5,7 @@ import { defineConfig } from '@playwright/test'
 // web 包是 ESM（type: module），__dirname 不可用，用 import.meta.url 推导。
 const configDir = path.dirname(fileURLToPath(import.meta.url))
 
-// E2E 编排真实 Go 后端 + PostgreSQL + 模拟 OpenAI，不依赖付费模型。
+// E2E 编排真实 Go 后端 + SQLite + 模拟 OpenAI，不依赖付费模型。
 // Go 服务 cwd 固定为仓库根目录，保证 file://migrations 始终可解析。
 export default defineConfig({
   testDir: './tests',
@@ -29,18 +29,18 @@ export default defineConfig({
     {
       // Playwright 先启动 webServer 再执行 globalSetup，因此数据库重置必须
       // 链在 Go 服务启动之前，否则启动时的迁移会被 globalSetup 清掉。
+      // SQLite 是单文件库：直接删除旧文件，服务启动时会自动迁移建表。
       // 后端 embed web/dist，先重新构建前端，避免服务陈旧 UI。
       command:
         'npm --prefix web run build && ' +
-        'docker compose exec -T postgres psql -U euler -d euler_test ' +
-        '-c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" && ' +
+        'rm -f /tmp/euler-e2e.db && ' +
         'go run ./cmd/euler -config web/tests/euler-e2e.yaml',
       cwd: path.resolve(configDir, '..'),
       url: 'http://127.0.0.1:18080/health',
       timeout: 120_000,
       reuseExistingServer: !process.env.CI,
       env: {
-        EULER_DATABASE_URL: 'postgres://euler:euler@127.0.0.1:5432/euler_test?sslmode=disable',
+        EULER_DATABASE_URL: '/tmp/euler-e2e.db',
         EULER_TEST_MODEL_KEY: 'euler-not-a-real-secret',
       },
     },

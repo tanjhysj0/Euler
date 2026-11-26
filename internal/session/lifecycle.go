@@ -57,10 +57,7 @@ func (s *Service) UpdateWorkspace(
 		if txErr := ensureSessionIdle(tx, id); txErr != nil {
 			return txErr
 		}
-		if txErr := lockWorkspacePath(tx, normalized); txErr != nil {
-			return txErr
-		}
-		workspaceRow, txErr := lockOrCreateWorkspace(tx, normalized)
+		workspaceRow, txErr := s.dialect.EnsureWorkspace(tx, normalized)
 		if txErr != nil {
 			return txErr
 		}

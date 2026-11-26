@@ -17,7 +17,7 @@ type Call struct {
 }
 
 // CallRecorder 持久化工具调用的生命周期。生产实现基于数据库，
-// 测试可以注入纯内存实现，从而不依赖 PostgreSQL。
+// 测试可以注入纯内存实现，从而不依赖数据库。
 type CallRecorder interface {
 	// Start 写入一条进行中的工具调用。
 	Start(ctx context.Context, call Call) error
