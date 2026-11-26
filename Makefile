@@ -76,8 +76,32 @@ fmt:
 tidy:
 	go mod tidy
 
-web-install:
-	npm install --prefix web
+# 一键启动前确保 Node.js 20+ 与 npm 可用；apt 环境缺失或版本过旧时自动安装 Node.js 22。
+ensure-node:
+	@set -e; \
+	node_major=$$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true); \
+	if [ -n "$$node_major" ] && [ "$$node_major" -ge 20 ] && command -v npm >/dev/null 2>&1; then \
+		echo "Node.js 已就绪：$$(node --version)，npm $$(npm --version)"; \
+	elif command -v apt-get >/dev/null 2>&1; then \
+		echo "未检测到可用的 Node.js 20+/npm，准备安装 Node.js 22"; \
+		sudo_cmd=""; \
+		if [ "$$(id -u)" -ne 0 ]; then \
+			if command -v sudo >/dev/null 2>&1; then sudo_cmd="sudo"; \
+			else echo "自动安装 Node.js 需要 root 或 sudo 权限" >&2; exit 1; fi; \
+		fi; \
+		$$sudo_cmd apt-get update; \
+		$$sudo_cmd apt-get install -y curl ca-certificates; \
+		curl -fsSL https://deb.nodesource.com/setup_22.x | $$sudo_cmd bash -; \
+		$$sudo_cmd apt-get install -y nodejs; \
+		node --version; \
+		npm --version; \
+	else \
+		echo "缺少 Node.js 20+/npm；自动安装目前仅支持 apt 环境" >&2; \
+		exit 1; \
+	fi
+
+web-install: ensure-node
+	npm --prefix web ci
 
 web-test:
 	npm --prefix web test -- --run
@@ -175,8 +199,8 @@ dev-db-stop:
 dev-db-restart:
 	@echo "数据库无需项目重启服务"
 
-# 一键启动：先构建前端，再启动数据库、后端（8080）与前端（5173）；已在运行的服务会先停止再启动。
-start: web-build dev-db-up dev-restart dev-web-restart
+# 一键启动：准备 Node.js 与前端依赖并构建前端，再启动数据库、后端（8080）与前端（5173）。
+start: web-install web-build dev-db-up dev-restart dev-web-restart
 
 # 一键停止：前端、后端、数据库。
 stop: dev-web-stop dev-stop dev-db-stop
