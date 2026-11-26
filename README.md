@@ -88,12 +88,12 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 
 - Go 1.26+
 - Node.js 20+
-- Docker 24+（需 compose v2 插件，即 `docker compose` 子命令，不是旧版 `docker-compose`；macOS Docker Desktop 自带，Linux 上需额外安装 `docker-compose-plugin`）
 - GNU Make
 
 **开发检查（可选）**：
 
 - `golangci-lint`（`make lint`、提交前检查）
+- Docker 24+（仅 Harbor 评测运行需要，含 compose v2 插件；日常开发默认 SQLite 单文件，无需 docker）
 
 **平台备注**：
 
@@ -142,13 +142,12 @@ Euler 的数据库访问基于 `internal/persistence.Dialect` 接口抽象，遵
 
 **切换到 PostgreSQL**：
 
-```bash
-# 启动 PG 容器并以后端连 PG 的方式启动服务
-make start EULER_DATABASE_DRIVER=postgres
+先自行准备 PostgreSQL 实例（本地安装或自备 docker），再用环境变量指向它：
 
-# 或分步：
-make dev-db-up EULER_DATABASE_DRIVER=postgres   # docker compose 起 PG
-make dev-api   EULER_DATABASE_DRIVER=postgres   # 后端连 PG
+```bash
+EULER_DATABASE_DRIVER=postgres \
+EULER_DATABASE_URL='postgres://euler:euler@127.0.0.1:5432/euler?sslmode=disable' \
+make start
 ```
 
 方言选择优先级：`EULER_DATABASE_DRIVER` 环境变量 > 从 `EULER_DATABASE_URL` 的 scheme 推断（`postgres://` → postgres，否则 sqlite）> 默认 `sqlite`。

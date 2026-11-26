@@ -5,12 +5,12 @@ EULER_PORT ?= 8080
 # 前端开发服务器端口，与 vite.config.ts 的 server.port 保持一致。
 WEB_PORT ?= 5173
 EULER_CONFIG ?=
-# 数据库方言：sqlite（默认，单文件，无需服务）或 postgres（需 docker compose 起服务）。
+# 数据库方言：sqlite（默认，单文件，无需服务）或 postgres（实例请自行准备）。
 # 同名环境变量优先；留空时由 config 从 EULER_DATABASE_URL 的 scheme 推断。
 EULER_DATABASE_DRIVER ?= sqlite
 # 本地开发库地址：默认值随方言变化；同名环境变量优先。
 #   - sqlite:   单文件，默认 ~/.euler/euler.db
-#   - postgres: docker compose 提供的本地实例
+#   - postgres: 默认连本地 127.0.0.1:5432（实例需自行准备）
 ifeq ($(EULER_DATABASE_DRIVER),postgres)
 EULER_DATABASE_URL ?= postgres://euler:euler@127.0.0.1:5432/euler?sslmode=disable
 else
@@ -127,13 +127,11 @@ dev-restart:
 # 前端有改动时使用：重新构建嵌入产物后再重启后端，避免 UI 仍是旧 dist。
 dev-reload: web-build dev-restart
 
-# SQLite 是单文件数据库，没有独立服务进程；postgres 模式用 docker compose 起服务。
+# 数据库服务无需项目管理：SQLite 是单文件；PostgreSQL 实例请自行准备
+# （本地安装或自备 docker），再用 EULER_DATABASE_URL 指向它。
+# 保留这些目标仅为兼容 start/stop/restart 的依赖链。
 dev-db-up:
-ifeq ($(EULER_DATABASE_DRIVER),postgres)
-	@docker compose up -d postgres
-else
-	@echo "SQLite 无需启动数据库服务"
-endif
+	@echo "数据库无需项目启动服务（SQLite 单文件；PG 实例请自行准备）"
 
 # 数据库、后端（8080）与 Vite 开发服务器（5173）一起启动/重启。
 dev-restart-all: dev-db-up dev-restart dev-web-restart
@@ -171,24 +169,14 @@ dev-web-stop:
 	if [ -n "$$pid" ]; then kill "$$pid" && echo "已停止前端 (pid $$pid)"; \
 	else echo "端口 $(WEB_PORT) 上没有运行中的前端"; fi
 
-# SQLite 无需停止数据库服务；postgres 模式停止容器。
 dev-db-stop:
-ifeq ($(EULER_DATABASE_DRIVER),postgres)
-	@docker compose stop postgres
-else
-	@echo "SQLite 无需停止数据库服务"
-endif
+	@echo "数据库无需项目停止服务"
 
-# SQLite 无需重启数据库服务；postgres 模式重启容器。
 dev-db-restart:
-ifeq ($(EULER_DATABASE_DRIVER),postgres)
-	@docker compose restart postgres
-else
-	@echo "SQLite 无需重启数据库服务"
-endif
+	@echo "数据库无需项目重启服务"
 
-# 一键启动：数据库 + 后端（8080）+ 前端（5173）；已在运行的服务会先停止再启动。
-start: dev-db-up dev-restart dev-web-restart
+# 一键启动：先构建前端，再启动数据库、后端（8080）与前端（5173）；已在运行的服务会先停止再启动。
+start: web-build dev-db-up dev-restart dev-web-restart
 
 # 一键停止：前端、后端、数据库。
 stop: dev-web-stop dev-stop dev-db-stop
