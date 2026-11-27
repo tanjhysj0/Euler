@@ -45,6 +45,7 @@ const (
 	zeroCount           = 0
 	singleWorker        = 1
 	logKeyRunID         = "run_id"
+	logKeySessionID     = "session_id"
 	logKeyError         = "error"
 )
 

@@ -115,7 +115,7 @@ func TestCreateSessionWithEmptyPathCreatesDefaultWorkspace(t *testing.T) {
 	created, err := svc.Create(context.Background(), CreateInput{ProfileID: testProfileID})
 	require.NoError(t, err)
 	require.DirExists(t, created.Workspace.Path)
-	require.Equal(t, filepath.Base(created.Workspace.Path), created.Title)
+	require.Equal(t, defaultSessionTitle, created.Title)
 	require.False(t, created.WorkspaceWarning)
 }
 

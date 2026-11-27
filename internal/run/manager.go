@@ -26,12 +26,24 @@ type Tracer interface {
 	FinishRun(ctx context.Context, errMsg string)
 }
 
+// TitleNamer 在 run 成功后为新会话生成可读标题。实现可为 nil，此时跳过。
+type TitleNamer interface {
+	NameSession(ctx context.Context, sessionID uuid.UUID) error
+}
+
+// Deps 汇总 Manager 的可选协作组件，避免构造函数参数继续膨胀。
+type Deps struct {
+	Tracer Tracer
+	Titles TitleNamer
+}
+
 // Manager 负责 run worker、取消和优雅关闭。
 type Manager struct {
 	store  RunStore
 	runner Runner
 	limits Limits
 	tracer Tracer
+	titles TitleNamer
 
 	mu      sync.Mutex
 	workers map[uuid.UUID]context.CancelFunc
@@ -48,13 +60,14 @@ const (
 )
 
 // NewManager 构建一个通过 store 持久化的 Manager。run 由 runner 在 limits
-// 约束下执行，tracer 为 nil 时关闭追踪。
-func NewManager(store RunStore, runner Runner, limits Limits, tracer Tracer) *Manager {
+// 约束下执行，deps 为 nil 时关闭追踪与标题生成。
+func NewManager(store RunStore, runner Runner, limits Limits, deps Deps) *Manager {
 	return &Manager{
 		store:   store,
 		runner:  runner,
 		limits:  limits,
-		tracer:  tracer,
+		tracer:  deps.Tracer,
+		titles:  deps.Titles,
 		workers: make(map[uuid.UUID]context.CancelFunc),
 	}
 }
@@ -162,8 +175,24 @@ func (m *Manager) execute(ctx context.Context, request Request) {
 		return
 	}
 	runErr := m.runner.Run(ctx, request)
+	if runErr == nil {
+		// 标题在 run.completed 事件之前落库，前端收到终态刷新会话列表时
+		// 就能拿到可读标题，不必再额外轮询。
+		m.nameSession(ctx, request.SessionID)
+	}
 	m.finish(dbCtx, request, runErr)
 	m.finishTrace(ctx, runErr)
+}
+
+// nameSession 为新会话生成可读标题；失败只记录日志，不影响 run 终态。
+func (m *Manager) nameSession(ctx context.Context, sessionID uuid.UUID) {
+	if m.titles == nil {
+		return
+	}
+	if err := m.titles.NameSession(ctx, sessionID); err != nil {
+		slog.Warn("name session", logKeySessionID, sessionID,
+			logKeyError, logging.Redact(err.Error()))
+	}
 }
 
 // handlePanic 将 worker 的 panic 记录为失败的 run；panic 值脱敏后写入

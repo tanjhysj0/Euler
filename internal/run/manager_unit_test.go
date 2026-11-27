@@ -116,7 +116,7 @@ func newUnitManager(
 	t *testing.T, store RunStore, runner Runner, maxDuration time.Duration,
 ) *Manager {
 	t.Helper()
-	manager := NewManager(store, runner, Limits{MaxDuration: maxDuration}, nil)
+	manager := NewManager(store, runner, Limits{MaxDuration: maxDuration}, Deps{})
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -301,7 +301,7 @@ func TestManagerRecoversPanicWithoutDatabase(t *testing.T) {
 func TestManagerShutdownInterruptsActiveRun(t *testing.T) {
 	store := newUnitFakeStore()
 	manager := NewManager(
-		store, &unitFakeRunner{block: true}, Limits{MaxDuration: time.Minute}, nil,
+		store, &unitFakeRunner{block: true}, Limits{MaxDuration: time.Minute}, Deps{},
 	)
 	started, err := manager.Start(context.Background(), uuid.New(), "shutdown")
 	require.NoError(t, err)
@@ -362,7 +362,9 @@ func (t *unitTracer) snapshot() (
 func TestManagerTracesRunLifecycle(t *testing.T) {
 	store := newUnitFakeStore()
 	tracer := &unitTracer{}
-	manager := NewManager(store, &unitFakeRunner{}, Limits{MaxDuration: time.Minute}, tracer)
+	manager := NewManager(
+		store, &unitFakeRunner{}, Limits{MaxDuration: time.Minute}, Deps{Tracer: tracer},
+	)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

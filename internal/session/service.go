@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
@@ -164,7 +163,7 @@ func (s *Service) insert(
 			ID:             sessionID,
 			WorkspaceID:    workspaceRow.ID,
 			ModelProfileID: resolvedID,
-			Title:          defaultTitle(path),
+			Title:          defaultSessionTitle,
 			Status:         statusActive,
 			CreatedAt:      now,
 			UpdatedAt:      now,
@@ -319,12 +318,4 @@ func toSessionView(
 		ProfileBaseURL: profile.BaseURL,
 		ProfileModel:   profile.Model,
 	}.toView()
-}
-
-func defaultTitle(path string) string {
-	base := filepath.Base(path)
-	if base == "." || base == string(filepath.Separator) || base == ".." {
-		return defaultSessionTitle
-	}
-	return base
 }

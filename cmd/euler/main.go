@@ -134,13 +134,17 @@ func buildServices(cfg config.Config, db *gorm.DB) services {
 	tracer := newTracer(cfg.Langfuse)
 	// 审批功能暂时关闭：AutoApprove 直接放行敏感工具，工具耗时不再包含人工等待。
 	// 需要恢复人工审核时，把 Gate 换回 approvals 服务即可。
+	models := agent.OpenAIChatModelFactory{
+		Timeout: cfg.ModelTimeout, RequestTimeout: cfg.ModelRequestTimeout,
+		ReasoningEffort: cfg.ModelReasoningEffort,
+	}
 	runner := agent.NewRuntime(agent.Deps{
 		Loader: agent.NewDBLoader(db, profiles, workspaceFinder, cfg.SystemPromptTemplate),
 		Events: events, Gate: approval.AutoApprove{}, Tracer: asRunTracer(tracer),
 		Limits: cfg.Agent, ShellTimeout: cfg.ShellTimeout,
 		ShellOutputBytes: cfg.ShellOutputBytes, PreviewBytes: cfg.PreviewBytes,
-		ShellPathPrefix: cfg.ShellPathPrefix, ModelTimeout: cfg.ModelTimeout,
-		ModelRequestTimeout:  cfg.ModelRequestTimeout,
+		ShellPathPrefix: cfg.ShellPathPrefix, Factory: models,
+		ModelTimeout: cfg.ModelTimeout, ModelRequestTimeout: cfg.ModelRequestTimeout,
 		ModelReasoningEffort: cfg.ModelReasoningEffort,
 	})
 	return services{
@@ -151,7 +155,10 @@ func buildServices(cfg config.Config, db *gorm.DB) services {
 		runStore:  runStore,
 		runs: run.NewManager(
 			runStore, runner, run.Limits{MaxDuration: cfg.Agent.MaxDuration},
-			asManagerTracer(tracer),
+			run.Deps{
+				Tracer: asManagerTracer(tracer),
+				Titles: session.NewTitleNamer(db, profiles, models),
+			},
 		),
 		tracer: tracer,
 	}
