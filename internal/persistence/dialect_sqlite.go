@@ -1,3 +1,5 @@
+//go:build !aix
+
 package persistence
 
 import (
