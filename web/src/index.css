@@ -318,14 +318,8 @@ body {
 .sidebar-logo {
   width: 28px;
   height: 28px;
-  border-radius: var(--radius);
-  background: var(--accent);
-  color: var(--accent-on);
-  display: grid;
-  place-items: center;
-  font-weight: 700;
-  font-size: 14px;
-  font-family: var(--font-mono);
+  display: block;
+  object-fit: contain;
   flex: 0 0 auto;
 }
 
@@ -1581,13 +1575,6 @@ body {
   padding: 20px 18px;
 }
 
-:root[data-theme='paper'] .sidebar-logo {
-  border-radius: 50%;
-  background: #24211c;
-  color: #f6f2ea;
-  font-family: var(--font-display);
-}
-
 :root[data-theme='paper'] .sidebar-brand-text strong {
   font-size: 21px;
 }
@@ -1754,12 +1741,10 @@ body {
 }
 
 /* 午夜霓虹：等宽标签、终端工具块与 > 提示 */
+/* 标记自带深色圆底，在近黑侧栏上对比偏弱，加一圈青绿描边光晕使其从背景分离 */
 :root[data-theme='midnight'] .sidebar-logo {
-  background: transparent;
-  border: 1px solid var(--accent);
-  color: var(--accent);
-  border-radius: 4px;
-  font-family: var(--font-mono);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.3), 0 0 10px rgba(45, 212, 191, 0.22);
 }
 
 :root[data-theme='midnight'] .sidebar-brand-text strong {

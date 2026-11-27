@@ -1,5 +1,9 @@
 # Euler
 
+<p align="center">
+  <img src="docs/assets/logo-banner.png" alt="Euler — 本地优先的编码 Agent 工作台" width="720">
+</p>
+
 Euler 是一个本地优先的编码 Agent 工作台：由 Go 后端、React 控制台和一个可独立运行的一次性 Agent 二进制组成。它既能作为日常编码助手在本地仓库里读写文件、执行命令，也能把同一个 Agent 打包进任务容器，接入 Harbor 做标准化编码评测。
 
 ## 演示

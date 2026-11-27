@@ -65,7 +65,7 @@ export default function SessionSidebar() {
   return (
     <div className="session-sidebar">
       <div className="sidebar-brand">
-        <span className="sidebar-logo">E</span>
+        <img className="sidebar-logo" src="/euler-mark.svg" alt="Euler" />
         <div className="sidebar-brand-text">
           <strong>Euler</strong>
           <small>编码 Agent 工作台</small>

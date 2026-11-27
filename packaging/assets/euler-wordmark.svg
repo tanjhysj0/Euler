@@ -1,0 +1,4 @@
+<!-- Euler 字标：fill 为 currentColor，可随父元素颜色变化（深底用浅色文字、浅底用深色文字）。 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 40" width="160" height="40">
+  <text x="0" y="30" font-family="'SF Pro Display','Inter','Helvetica Neue',system-ui,-apple-system,'PingFang SC',sans-serif" font-size="32" font-weight="700" letter-spacing="-0.02em" fill="currentColor">Euler</text>
+</svg>
