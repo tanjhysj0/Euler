@@ -14,10 +14,12 @@ fi
 target="${1:-all}"
 case "$target" in
 	all)
+		# 版本号优先取 VERSION，其次取 git describe；构建产物可用 -version 查看。
+		version="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || printf 'dev')}"
 		npm --prefix web ci
 		npm --prefix web run build
 		mkdir -p bin
-		go build -o bin/euler ./cmd/euler
+		go build -ldflags "-X main.version=$version" -o bin/euler ./cmd/euler
 		;;
 	agent-dist)
 		# 输出目录可由 AGENT_DIST 覆盖，默认放在 bin/agent-dist。

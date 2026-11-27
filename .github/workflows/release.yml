@@ -1,0 +1,152 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: 归档与 Linux 安装包
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: 交叉编译并发布归档 / deb / rpm
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  macos:
+    name: macOS DMG（${{ matrix.arch }}）
+    needs: release
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, amd64]
+    env:
+      VERSION: ${{ github.ref_name }}
+      ARCH: ${{ matrix.arch }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+      MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+      MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 下载对应架构的归档
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p build
+          gh release download "$GITHUB_REF_NAME" \
+            --pattern "euler_${version}_darwin_${ARCH}.tar.gz" --dir build
+          tar -xzf "build/euler_${version}_darwin_${ARCH}.tar.gz" -C build
+      - name: 生成应用包、DMG 并签名公证
+        run: |
+          set -euo pipefail
+          chmod +x packaging/macos/package.sh
+          packaging/macos/package.sh --binary build/euler --arch "$ARCH" \
+            --version "$VERSION" --out dist
+      - name: 上传 DMG
+        run: gh release upload "$GITHUB_REF_NAME" dist/*.dmg --clobber
+
+  windows:
+    name: Windows MSI（${{ matrix.arch }}）
+    needs: release
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      WINDOWS_SIGN_PFX: ${{ secrets.WINDOWS_SIGN_PFX }}
+      WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
+      WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: 安装 WiX v4
+        run: dotnet tool install --global wix --version "4.*"
+      - name: 下载对应架构的归档
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $pattern = "euler_${version}_windows_${{ matrix.arch }}.zip"
+          gh release download $env:GITHUB_REF_NAME --pattern $pattern --dir build
+          Expand-Archive -Path "build/$pattern" -DestinationPath build -Force
+      - name: 构建并签名 MSI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./packaging/windows/package.ps1 -Version $env:GITHUB_REF_NAME `
+            -Arch ${{ matrix.arch }} -ExePath 'build\euler.exe' -OutDir 'dist'
+      - name: 上传 MSI
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem -Path dist -Filter *.msi | Select-Object -First 1).FullName
+          gh release upload $env:GITHUB_REF_NAME $msi --clobber
+
+  checksums:
+    name: 校验和与 cosign 签名
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # keyless 签名需要向 GitHub OIDC 服务申请身份令牌
+      id-token: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: sigstore/cosign-installer@v3
+      - name: 下载全部产物并重新生成校验和
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir release
+          cd release
+          rm -f checksums.txt checksums.txt.sigstore.json
+          sha256sum -- * > checksums.txt
+          cat checksums.txt
+      - name: cosign keyless 签名校验和
+        run: |
+          set -euo pipefail
+          cd release
+          # keyless：使用本工作流的 OIDC 身份，无需任何私钥或证书 Secrets。
+          cosign sign-blob --yes \
+            --bundle checksums.txt.sigstore.json \
+            checksums.txt
+      - name: 上传校验和与签名
+        run: |
+          set -euo pipefail
+          cd release
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            checksums.txt checksums.txt.sigstore.json --clobber

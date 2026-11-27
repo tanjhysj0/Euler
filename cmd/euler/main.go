@@ -3,9 +3,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -38,16 +40,27 @@ const (
 	logKeyError       = "error"
 )
 
+// version 由构建流程通过 -ldflags "-X main.version=..." 注入。
+var version = "dev"
+
 func main() {
-	configPath := flag.String("config", defaultConfigPath(), "path to config file")
+	configPath := flag.String("config", defaultConfigPath(), "配置文件路径")
+	openBrowser := flag.Bool("open", envBool(envOpenBrowser), "启动后自动用浏览器打开界面")
+	showVersion := flag.Bool("version", false, "打印版本号后退出")
 	flag.Parse()
-	if err := serve(*configPath); err != nil {
+	if *showVersion {
+		if _, err := fmt.Fprintln(os.Stdout, "euler", version); err != nil {
+			slog.Warn("print version failed", logKeyError, err)
+		}
+		return
+	}
+	if err := serve(*configPath, *openBrowser); err != nil {
 		slog.Error("euler startup failed", "error", err)
 		os.Exit(exitFailure)
 	}
 }
 
-func serve(configPath string) error {
+func serve(configPath string, openBrowser bool) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -76,7 +89,10 @@ func serve(configPath string) error {
 	}
 	router := registerRoutes(cfg, auth, db, svc)
 	slog.Info("config loaded", "listen", cfg.Listen, "allowed_origins", len(cfg.AllowedOrigins))
-	return serveHTTP(router, svc.runs, svc.tracer, cfg.Listen)
+	return serveHTTP(router, svc.runs, svc.tracer, httpServerOptions{
+		listen:      cfg.Listen,
+		openBrowser: openBrowser,
+	})
 }
 
 // services 在各启动步骤之间承载组装好的领域服务。
@@ -176,27 +192,49 @@ func registerRoutes(
 	return router
 }
 
+// httpServerOptions 汇总 HTTP 服务启动参数，避免函数参数过多。
+type httpServerOptions struct {
+	listen      string
+	openBrowser bool
+}
+
 // serveHTTP 运行服务器直到收到 SIGINT/SIGTERM，然后排空 HTTP 和
 // run manager 再返回，使延迟执行的清理逻辑关闭数据库。
 func serveHTTP(
-	router *gin.Engine, runs *run.Manager, tracer *tracing.Tracer, addr string,
+	router *gin.Engine, runs *run.Manager, tracer *tracing.Tracer, opts httpServerOptions,
 ) error {
 	server := &http.Server{
-		Addr:              addr,
+		Addr:              opts.listen,
 		Handler:           router,
 		ReadHeaderTimeout: readHeaderTimeout,
+	}
+	// 先显式监听，确保端口就绪后再打开浏览器，避免页面先于服务加载。
+	listener, err := net.Listen("tcp", opts.listen)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", opts.listen, err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	errCh := make(chan error, serverErrBuffer)
-	go func() { errCh <- server.ListenAndServe() }()
+	go func() { errCh <- server.Serve(listener) }()
+	if opts.openBrowser {
+		go openUI(opts.listen)
+	}
 	select {
-	case err := <-errCh:
-		return fmt.Errorf("serve http: %w", err)
+	case err = <-errCh:
+		return wrapServeError(err)
 	case <-ctx.Done():
 		shutdown(server, runs, tracer)
 		return nil
 	}
+}
+
+// wrapServeError 把正常关闭排除在外，便于调用方区分真实故障。
+func wrapServeError(err error) error {
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return fmt.Errorf("serve http: %w", err)
 }
 
 func shutdown(server *http.Server, runs *run.Manager, tracer *tracing.Tracer) {

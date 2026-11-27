@@ -247,6 +247,56 @@ make build
 .\bin\euler.exe
 ```
 
+启动参数：`-open` 表示启动后用默认浏览器打开界面，`-version` 打印版本号，`-config` 指定配置文件。
+
+### 安装包与发布
+
+发布产物由 GoReleaser 与 `packaging/` 下的平台脚本配合生成：
+
+| 平台 | 产物 | 构建环境 |
+|---|---|---|
+| macOS | `.dmg`（内含 `Euler.app`，支持签名与公证） | macOS，`packaging/macos/package.sh` |
+| Windows | `.msi`（安装到 Program Files，创建桌面与开始菜单快捷方式） | Windows，`packaging/windows/package.ps1`（WiX v4） |
+| Linux | `.deb` / `.rpm`（含应用菜单入口） | 任意平台，GoReleaser + nfpm |
+| 通用 | `.tar.gz` / `.zip` 归档、`checksums.txt` | 任意平台 |
+
+```bash
+make release-snapshot                            # 本地生成归档与 deb/rpm，不上传
+make package-macos                               # 本机生成 DMG；无证书时跳过签名与公证
+make package-windows VERSION=1.2.3 ARCH=amd64    # Windows 本机生成 MSI
+```
+
+推送 `v*` tag 会触发 `.github/workflows/release.yml`：Ubuntu 上由 GoReleaser 产出归档、deb/rpm 与校验和；macOS 与 Windows 分别生成并签名安装器；最后由独立任务重新汇总全部产物生成 `checksums.txt`，并用 **cosign keyless** 生成 `checksums.txt.sigstore.json`。
+
+安装器创建的快捷方式都会附带 `-open` 参数，点击后用默认浏览器打开界面。
+
+代码签名与公证需要在仓库 Secrets 中配置：
+
+| Secret | 用途 |
+|---|---|
+| `MACOS_SIGN_P12` / `MACOS_SIGN_PASSWORD` | Developer ID Application 证书（base64 与密码） |
+| `MACOS_NOTARY_KEY` / `MACOS_NOTARY_KEY_ID` / `MACOS_NOTARY_ISSUER_ID` | App Store Connect API Key 与公证身份 |
+| `WINDOWS_SIGN_PFX` / `WINDOWS_SIGN_PASSWORD` | Windows 代码签名证书（base64 与密码） |
+| `WINDOWS_TIMESTAMP_URL` | 可选，默认 `http://timestamp.digicert.com` |
+
+未配置签名材料时流水线仍会产出安装器，但用户会看到 Gatekeeper 或 SmartScreen 警告。
+
+### 校验和与来源验证（零成本）
+
+校验和签名使用 cosign keyless（Sigstore）：工作流用 GitHub Actions 的 OIDC 身份签名，**不需要购买证书，也不需要配置任何私钥 Secret**。把 `checksums.txt` 与 `checksums.txt.sigstore.json` 下载到同一目录后验证：
+
+```bash
+# macOS / Linux
+cosign verify-blob \
+  --certificate-identity "https://github.com/tanjhysj0/Euler/.github/workflows/release.yml@refs/tags/<tag>" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  --bundle checksums.txt.sigstore.json \
+  checksums.txt
+sha256sum --check --ignore-missing checksums.txt
+```
+
+`<tag>` 替换为实际版本标签（如 `v0.1.0`）。Windows 下安装 cosign 后命令相同，校验哈希可改用 `Get-FileHash` 与 `checksums.txt` 对照。
+
 ### 常用检查
 
 ```bash

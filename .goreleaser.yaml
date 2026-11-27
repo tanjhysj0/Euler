@@ -1,0 +1,91 @@
+# GoReleaser 配置：负责交叉编译、归档、Linux 安装包与校验和。
+# macOS DMG 与 Windows MSI 由 packaging/ 下的脚本在对应平台构建并签名，
+# 原因见 README「安装包与发布」：这两类安装器依赖平台原生工具链。
+version: 2
+
+project_name: euler
+
+before:
+  hooks:
+    - npm --prefix web ci
+    - npm --prefix web run build
+
+builds:
+  - id: euler
+    main: ./cmd/euler
+    binary: euler
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: euler
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+nfpms:
+  - id: euler
+    package_name: euler
+    vendor: Euler
+    homepage: https://github.com/tanjhysj0/Euler
+    maintainer: Euler <tanjhysj0@users.noreply.github.com>
+    description: Local single-user agent workspace with web UI
+    section: devel
+    priority: optional
+    bindir: /usr/bin
+    formats:
+      - deb
+      - rpm
+    dependencies:
+      - ca-certificates
+    contents:
+      - src: packaging/linux/euler.desktop
+        dst: /usr/share/applications/euler.desktop
+      - src: packaging/assets/euler-256.png
+        dst: /usr/share/icons/hicolor/256x256/apps/euler.png
+      - src: README.md
+        dst: /usr/share/doc/euler/README.md
+
+release:
+  footer: |
+    ## 安装
+
+    - **macOS**：下载 `euler_<版本>_macos_<架构>.dmg`，打开后把 Euler 拖入「应用程序」。
+    - **Windows**：下载 `euler_<版本>_windows_<架构>.msi`，双击安装，会创建桌面与开始菜单快捷方式。
+    - **Linux**：`sudo apt install ./euler_<版本>_linux_<架构>.deb`，或 `sudo rpm -i euler-<版本>.*.rpm`。
+
+    校验和见 `checksums.txt`，cosign keyless 签名见 `checksums.txt.sigstore.json`（无需 GPG 私钥）。

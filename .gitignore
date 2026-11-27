@@ -32,3 +32,7 @@
 /harbor_eval/results/
 /harbor_eval/.pytest_cache/
 /harbor_eval/**/__pycache__/
+
+# 发布与安装包产物
+/dist/
+/packaging/out/

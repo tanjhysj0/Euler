@@ -1,4 +1,4 @@
-.PHONY: build agent-dist test lint fmt tidy check-env test-smoke web-install web-test web-build test-e2e dev-api dev-restart dev-web-restart dev-stop dev-web-stop dev-reload dev-restart-all dev-web start stop restart harbor-clean harbor-check-selected harbor-download harbor-test-run harbor-test-easy harbor-test-medium harbor-test-hard harbor-test harbor-test-all harbor-test-fast
+.PHONY: build agent-dist test lint fmt tidy check-env test-smoke web-install web-test web-build test-e2e dev-api dev-restart dev-web-restart dev-stop dev-web-stop dev-reload dev-restart-all dev-web start stop restart harbor-clean harbor-check-selected harbor-download harbor-test-run harbor-test-easy harbor-test-medium harbor-test-hard harbor-test harbor-test-all harbor-test-fast release-snapshot release package-macos package-windows
 
 # Windows 使用批处理入口，其他平台使用 Bash 脚本。
 ifeq ($(OS),Windows_NT)
@@ -70,6 +70,27 @@ build:
 # 交叉编译容器内运行的一次性 agent；容器可能是 amd64 或 arm64。
 agent-dist:
 	@$(BUILD_SCRIPT) agent-dist
+
+# Windows 安装包的目标架构；版本号由命令行传入，例如
+# make package-windows VERSION=1.2.3 ARCH=arm64
+VERSION ?=
+ARCH ?= amd64
+
+# 本地生成快照发布产物（交叉编译 + 归档 + deb/rpm），不会上传。
+release-snapshot:
+	goreleaser release --snapshot --clean --skip=publish
+
+# 按当前 tag 正式发布到 GitHub；需要 GITHUB_TOKEN 与签名相关环境变量。
+release:
+	goreleaser release --clean
+
+# 本机生成 macOS DMG；未提供证书时跳过签名与公证。
+package-macos: build
+	@./packaging/macos/package.sh
+
+# Windows 本机生成 MSI 安装器；需要 WiX v4 与已编译的 bin\euler.exe。
+package-windows:
+	@powershell -NoProfile -ExecutionPolicy Bypass -File packaging/windows/package.ps1 -Version "$(VERSION)" -Arch "$(ARCH)"
 
 test:
 	go test ./...

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Euler
+Comment=Local single-user agent workspace
+Comment[zh_CN]=本地单用户 Agent 工作台
+Exec=euler -open
+Icon=euler
+Terminal=false
+Categories=Development;
+StartupNotify=false
