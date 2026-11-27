@@ -74,6 +74,7 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 | `internal/logging` | 结构化日志 |
 | `internal/api` | 路由、本机鉴权、静态资源 |
 | `internal/tracing` | Langfuse 追踪 |
+| `internal/tray` | 系统托盘图标与菜单（macOS 菜单栏 / Windows 通知区域） |
 | `web/` | React 控制台（Vite + Ant Design + TanStack Query + Zustand） |
 | `harbor_eval/` | Harbor Agent、任务清单、筛选脚本与运行结果 |
 | `migrations/` | SQL 迁移（按方言分目录：`sqlite/`、`postgres/`） |
@@ -88,6 +89,7 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 
 - Go 1.26+
 - Node.js 20+
+- macOS：Xcode Command Line Tools（`clang`，菜单栏托盘依赖 Cocoa，需要 cgo）
 
 `make` 只是便捷入口，不是必需项：macOS / Linux 可直接运行 `scripts/*.sh`，原生 Windows 可直接运行 `scripts\*.cmd`（`dev.cmd` 依赖 Windows PowerShell 5+）。
 
@@ -249,7 +251,7 @@ make build
 
 启动参数：`-open` 表示启动后用默认浏览器打开界面，`-tray` 表示常驻系统托盘（macOS 菜单栏 / Windows 通知区域）而不占用终端窗口，`-version` 打印版本号，`-config` 指定配置文件。托盘菜单包含「打开 Web 地址」与「退出」，选择退出会先优雅关闭 HTTP 服务与数据库再结束进程。
 
-`-tray` 目前只在 macOS 与 Windows 生效；Linux 上没有托盘实现，会自动回退为前台运行。
+`-tray` 目前只在 macOS 与 Windows 生效；Linux 上没有托盘实现，会自动回退为前台运行。macOS 的托盘依赖 Cocoa，构建时需要 C 工具链（Xcode Command Line Tools），因此本机构建请保持 `CGO_ENABLED=1`。
 
 ### 安装包与发布
 
