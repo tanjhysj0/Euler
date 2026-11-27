@@ -97,7 +97,7 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 
 **平台备注**：
 
-`make` target 内部使用 `lsof` / `nohup` / `grep` / `sed` / `awk` / `find` / `kill` 等 Unix 工具。Windows 原生环境（cmd / PowerShell）无法直接执行，需使用 WSL2 / Git Bash / MSYS2，或绕过 make 直接跑 `go run ./cmd/euler` 启动后端、`npm --prefix web run dev` 启动前端。
+`make` 的构建与开发入口由脚本实现：macOS / Linux 使用 `scripts/*.sh`；原生 Windows 下 Make 选择对应的 `scripts\*.cmd`，其中 `dev.cmd` 调用 PowerShell（Windows PowerShell 5+），具体逻辑位于 `scripts/dev.ps1`。也可以不使用 Make，直接运行 `scripts\dev.cmd start`、`scripts\dev.cmd stop` 等命令。
 
 ### 步骤
 
@@ -105,6 +105,12 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 
 ```bash
 make start
+```
+
+Windows PowerShell 也可以直接执行：
+
+```powershell
+.\scripts\dev.cmd start
 ```
 
 自动拉起后端（`http://127.0.0.1:8080`）与前端开发服务器（`http://127.0.0.1:5173`，代理 `/api` 与 `/health` 到后端，热更新）。默认数据库使用 SQLite 单文件（`~/.euler/euler.db`），服务启动时自动执行 `migrations/sqlite/` 下的迁移建表，无需单独启动数据库容器；单独启动后端用 `make dev-api` 即可。如需切换到 PostgreSQL，见下方「多数据库支持」。
@@ -181,13 +187,13 @@ $env:EULER_LANGFUSE_SECRET_KEY='sk-...'
 ### 常用命令
 
 ```bash
-# 一键启动：数据库 + 后端 8080 + 前端 5173
+# 一键启动：后端 8080 + 前端 5173
 make start
 
-# 一键停止：前端、后端、数据库
+# 一键停止：前端与后端
 make stop
 
-# 重新构建前后端并重启三者
+# 重新构建前后端并重启两个服务
 make restart
 
 # 后端（默认 127.0.0.1:8080）
@@ -283,7 +289,8 @@ make test-e2e  # Playwright 端到端测试
 
 ### 前置条件
 
-- 已安装 `harbor` CLI 与 Docker
+- 支持 macOS / Linux / WSL2，不承诺原生 Windows 支持
+- 已安装 Python 3.9+、`harbor` CLI 与 Docker
 - 设置模型密钥：`EULER_MODEL_API_KEY` 或 `OPENAI_API_KEY`（必填）
 - 设置模型信息：`EULER_MODEL`（模型名）与 `EULER_MODEL_BASE_URL`（API 地址）为必填；`EULER_REASONING_EFFORT` 可选（`low` / `medium` / `high` / `max`）
 

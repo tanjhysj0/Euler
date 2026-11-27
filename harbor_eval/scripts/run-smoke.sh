@@ -19,7 +19,7 @@ if [ -n "$langfuse_url" ]; then
   allow_args+=(--allow-agent-host "$langfuse_host")
 fi
 
-make -C "$repo_root" agent-dist
+"$repo_root/scripts/build.sh" agent-dist
 
 # 每次运行使用唯一标识，避免 Harbor 复用历史 trial 打印过期 reward
 run_id=$(date +%Y%m%d-%H%M%S)

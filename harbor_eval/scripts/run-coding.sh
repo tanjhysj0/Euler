@@ -20,7 +20,7 @@ if [ -n "$langfuse_url" ]; then
   allow_args+=(--allow-agent-host "$langfuse_host")
 fi
 
-make -C "$repo_root" agent-dist
+"$repo_root/scripts/build.sh" agent-dist
 
 run_id=$(date +%Y%m%d-%H%M%S)
 results_dir="harbor_eval/results/$run_id"
