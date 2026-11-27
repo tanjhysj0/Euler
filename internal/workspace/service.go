@@ -133,6 +133,10 @@ type Listing struct {
 	CurrentPath string      `json:"current_path"`
 	ParentPath  *string     `json:"parent_path"`
 	Directories []Directory `json:"directories"`
+	// Roots 是可切换的根入口：Windows 为各逻辑盘符，类 Unix 为根目录。
+	Roots []Directory `json:"roots"`
+	// Breadcrumbs 是从卷根到当前目录的层级，前端直接渲染即可。
+	Breadcrumbs []Directory `json:"breadcrumbs"`
 }
 
 // Browse 在不读取文件内容的前提下列出 path 的直接子目录。
@@ -150,6 +154,8 @@ func Browse(path string) (Listing, error) {
 		CurrentPath: current,
 		ParentPath:  parentPath(current),
 		Directories: collectDirectories(current, entries),
+		Roots:       browseRoots(),
+		Breadcrumbs: breadcrumbsFrom(current),
 	}, nil
 }
 

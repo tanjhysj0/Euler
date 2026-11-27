@@ -11,7 +11,8 @@ import type { SessionView } from '../../api/types'
 import ThemeSwitcher from '../../components/ThemeSwitcher'
 
 function workspaceBasename(path: string): string {
-  const parts = path.split('/').filter(Boolean)
+  // 同时兼容 Windows 与 POSIX 分隔符，避免侧边栏显示整条路径。
+  const parts = path.split(/[\\/]/).filter(Boolean)
   return parts[parts.length - 1] ?? path
 }
 

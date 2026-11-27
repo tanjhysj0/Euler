@@ -138,3 +138,31 @@ func TestBrowseRejectsMissingDirectory(t *testing.T) {
 	_, err := Browse(filepath.Join(t.TempDir(), "missing"))
 	require.Error(t, err)
 }
+
+// TestBrowseReturnsRootsAndBreadcrumbs 验证目录列表携带可切换的根入口
+// 与完整的层级信息，前端不再自行拆分路径。
+func TestBrowseReturnsRootsAndBreadcrumbs(t *testing.T) {
+	listing, err := Browse(t.TempDir())
+	require.NoError(t, err)
+	require.NotEmpty(t, listing.Roots)
+	for _, root := range listing.Roots {
+		require.True(t, filepath.IsAbs(root.Path))
+	}
+	require.NotEmpty(t, listing.Breadcrumbs)
+	last := listing.Breadcrumbs[len(listing.Breadcrumbs)-1]
+	require.Equal(t, listing.CurrentPath, last.Path)
+	require.Equal(t, rootName(volumeRoot(listing.CurrentPath)), listing.Breadcrumbs[0].Name)
+}
+
+// TestBreadcrumbsFormParentChain 验证每一级都是上一级的直接子目录。
+func TestBreadcrumbsFormParentChain(t *testing.T) {
+	crumbs := breadcrumbsFrom(t.TempDir())
+	require.NotEmpty(t, crumbs)
+	for index, crumb := range crumbs {
+		require.True(t, filepath.IsAbs(crumb.Path))
+		if index == 0 {
+			continue
+		}
+		require.Equal(t, filepath.Dir(crumb.Path), crumbs[index-1].Path)
+	}
+}

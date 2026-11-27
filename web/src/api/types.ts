@@ -123,6 +123,10 @@ export interface DirectoryListing {
   current_path: string
   parent_path: string | null
   directories: WorkspaceDirectory[]
+  // roots 是可切换的根入口：Windows 为各盘符，类 Unix 为 "/"。
+  roots: WorkspaceDirectory[]
+  // breadcrumbs 是从卷根到当前目录的完整层级。
+  breadcrumbs: WorkspaceDirectory[]
 }
 
 export interface APIErrorBody {

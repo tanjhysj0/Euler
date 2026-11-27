@@ -1,4 +1,5 @@
-import { Alert, Breadcrumb, Button, Empty, Input, Modal, Spin, Typography, message } from 'antd'
+import { Alert, Breadcrumb, Button, Dropdown, Empty, Input, Modal, Spin, Typography, message } from 'antd'
+import type { MenuProps } from 'antd'
 import { useState } from 'react'
 import { APIError } from '../../api/client'
 import { useCreateDirectory, useDirectoryListing } from '../../api/queries'
@@ -22,15 +23,6 @@ export function FolderIcon() {
       />
     </svg>
   )
-}
-
-// splitBreadcrumb 把绝对路径拆成可点击的层级，根目录单独由调用方补上。
-function splitBreadcrumb(path: string) {
-  const parts = path.split('/').filter((part) => part !== '')
-  return parts.map((name, index) => ({
-    name,
-    path: `/${parts.slice(0, index + 1).join('/')}`,
-  }))
 }
 
 // DirectoryPicker 通过逐层列出子目录让用户选择工作目录，确认后才回传路径。
@@ -59,6 +51,14 @@ export default function DirectoryPicker({
   const listingQuery = useDirectoryListing(path, open)
   const listing = listingQuery.data
   const currentPath = listing?.current_path ?? path
+  // 根入口与层级完全由后端给出：Windows 为盘符，类 Unix 为 "/"。
+  const roots = listing?.roots ?? []
+  const crumbs = listing?.breadcrumbs ?? []
+  const rootLabel = crumbs[0]?.name ?? '/'
+  const rootMenu: MenuProps = {
+    items: roots.map((root) => ({ key: root.path, label: root.name })),
+    onClick: ({ key }) => setPath(key),
+  }
 
   // 新建目录成功后直接进入该目录，方便继续确认或继续新建。
   async function submitNewDirectory() {
@@ -75,15 +75,17 @@ export default function DirectoryPicker({
       message.error(err instanceof APIError ? err.message : '创建目录失败')
     }
   }
-  const crumbs = [
+  const breadcrumbItems = [
     {
       title: (
-        <button type="button" className="dir-crumb" onClick={() => setPath('/')}>
-          /
-        </button>
+        <Dropdown menu={rootMenu} disabled={roots.length === 0}>
+          <button type="button" className="dir-crumb dir-root">
+            {rootLabel} ▾
+          </button>
+        </Dropdown>
       ),
     },
-    ...splitBreadcrumb(currentPath).map((node) => ({
+    ...crumbs.slice(1).map((node) => ({
       title: (
         <button type="button" className="dir-crumb" onClick={() => setPath(node.path)}>
           {node.name}
@@ -149,7 +151,7 @@ export default function DirectoryPicker({
     >
       <div className="dir-picker">
         <div className="dir-picker-head">
-          <Breadcrumb className="dir-picker-crumbs" items={crumbs} />
+          <Breadcrumb className="dir-picker-crumbs" items={breadcrumbItems} />
           <Button
             size="small"
             type="text"

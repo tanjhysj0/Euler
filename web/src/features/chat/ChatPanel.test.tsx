@@ -204,13 +204,34 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
         current_path: '/Users/test',
         parent_path: '/Users',
         directories: [{ name: 'project', path: '/Users/test/project' }],
+        roots: [{ name: '/', path: '/' }],
+        breadcrumbs: [
+          { name: '/', path: '/' },
+          { name: 'Users', path: '/Users' },
+          { name: 'test', path: '/Users/test' },
+        ],
       })
     }
     const directories =
       target === '/Users/test/project'
         ? [{ name: 'nested', path: '/Users/test/project/nested' }]
         : []
-    return ok({ current_path: target, parent_path: null, directories })
+    return ok({
+      current_path: target,
+      parent_path: null,
+      directories,
+      roots: [{ name: '/', path: '/' }],
+      breadcrumbs: [
+        { name: '/', path: '/' },
+        ...target
+          .split('/')
+          .filter(Boolean)
+          .map((name, index, parts) => ({
+            name,
+            path: `/${parts.slice(0, index + 1).join('/')}`,
+          })),
+      ],
+    })
   }
   if (url === '/api/v1/runs/r1' && method === 'GET') {
     runFetchCount += 1
