@@ -21,10 +21,17 @@ func TestRenderSystemPromptDescribesMethodology(t *testing.T) {
 		"最小修复",
 		"验证",
 		testWorkspace,
+		"运行平台：" + platformLabel(),
+		"命令解释器：" + shellLabel(),
 	}
 	for _, text := range mustContain {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("system prompt 缺少 %q: %s", text, prompt)
+		}
+	}
+	for _, placeholder := range []string{"{{workspace}}", "{{platform}}", "{{shell}}"} {
+		if strings.Contains(prompt, placeholder) {
+			t.Fatalf("system prompt 仍有未替换的占位符 %q: %s", placeholder, prompt)
 		}
 	}
 	if strings.Contains(prompt, "审批") {

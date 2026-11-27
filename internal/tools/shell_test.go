@@ -60,43 +60,47 @@ func TestShellTimeoutAndTruncation(t *testing.T) {
 // zsh，且登录参数只用于支持 -l 的 zsh/bash。
 func TestResolveShellOrderFollowsPlatform(t *testing.T) {
 	linuxOrder := []shellSpec{
-		{path: "/bin/bash", login: true},
-		{path: "/bin/sh"},
+		{path: "/bin/bash", args: loginArgs},
+		{path: "/bin/sh", args: stdinArgs},
 	}
 	shell, args := resolveShellFrom(linuxOrder,
 		func(path string) bool { return path == "/bin/bash" })
 	require.Equal(t, "/bin/bash", shell)
-	require.Equal(t, []string{loginFlag, stdinFlag}, args)
+	require.Equal(t, loginArgs, args)
 
 	shell, args = resolveShellFrom(linuxOrder,
 		func(path string) bool { return path == "/bin/sh" })
 	require.Equal(t, "/bin/sh", shell)
-	require.Equal(t, []string{stdinFlag}, args)
+	require.Equal(t, stdinArgs, args)
 
 	darwinOrder := []shellSpec{
-		{path: "/bin/zsh", login: true},
-		{path: "/bin/bash", login: true},
-		{path: "/bin/sh"},
+		{path: "/bin/zsh", args: loginArgs},
+		{path: "/bin/bash", args: loginArgs},
+		{path: "/bin/sh", args: stdinArgs},
 	}
 	shell, args = resolveShellFrom(darwinOrder,
 		func(path string) bool { return path == "/bin/zsh" })
 	require.Equal(t, "/bin/zsh", shell)
-	require.Equal(t, []string{loginFlag, stdinFlag}, args)
+	require.Equal(t, loginArgs, args)
 
 	shell, args = resolveShellFrom(darwinOrder,
 		func(path string) bool { return path == "/bin/bash" })
 	require.Equal(t, "/bin/bash", shell)
-	require.Equal(t, []string{loginFlag, stdinFlag}, args)
+	require.Equal(t, loginArgs, args)
 
 	shell, args = resolveShellFrom(darwinOrder, func(string) bool { return false })
 	require.Equal(t, fallbackShell, shell)
-	require.Equal(t, []string{stdinFlag}, args)
+	require.Equal(t, stdinArgs, args)
 }
 
-// TestShellCandidatesPreferPlatformShell 验证非 darwin 平台优先 bash。
+// TestShellCandidatesPreferPlatformShell 验证各平台优先使用的解释器。
 func TestShellCandidatesPreferPlatformShell(t *testing.T) {
 	candidates := shellCandidates()
 	require.NotEmpty(t, candidates)
+	if runtime.GOOS == "windows" {
+		require.Equal(t, "pwsh.exe", candidates[0].path)
+		return
+	}
 	if runtime.GOOS == darwinGOOS {
 		require.Equal(t, "/bin/zsh", candidates[0].path)
 		return
@@ -107,9 +111,7 @@ func TestShellCandidatesPreferPlatformShell(t *testing.T) {
 // TestResolveShellReturnsExistingBinary 验证真实环境下选中的解释器存在。
 func TestResolveShellReturnsExistingBinary(t *testing.T) {
 	shell, _ := resolveShell(shellExists)
-	info, err := os.Stat(shell)
-	require.NoError(t, err)
-	require.False(t, info.IsDir())
+	require.True(t, shellExists(shell), "选中的解释器应存在: %s", shell)
 }
 
 func TestShellReportsExitCode(t *testing.T) {

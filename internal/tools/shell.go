@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"runtime"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -20,8 +20,6 @@ const (
 	loginFlag = "-l"
 	// stdinFlag 让 shell 从标准输入读取命令。
 	stdinFlag = "-s"
-	// fallbackShell 是候选解释器都不存在时的兜底选择。
-	fallbackShell = "/bin/sh"
 	// darwinGOOS 是 macOS 的 GOOS 取值，用于保留本地登录 shell 行为。
 	darwinGOOS = "darwin"
 	// envAssignment 分隔环境变量的键与值。
@@ -34,26 +32,17 @@ const (
 	emptyText = ""
 )
 
-// shellSpec 描述一个候选解释器及其是否支持登录模式。
-type shellSpec struct {
-	path  string
-	login bool
-}
+// loginArgs 与 stdinArgs 是 POSIX shell 的启动参数：登录模式读取用户 PATH，
+// 从标准输入执行命令。
+var (
+	loginArgs = []string{loginFlag, stdinFlag}
+	stdinArgs = []string{stdinFlag}
+)
 
-// shellCandidates 返回当前平台优先使用的解释器顺序。评测任务跑在 Linux
-// 容器里，因此以 bash/sh 为主；macOS 上保留 zsh 登录 shell 以读取用户 PATH。
-func shellCandidates() []shellSpec {
-	if runtime.GOOS == darwinGOOS {
-		return []shellSpec{
-			{path: "/bin/zsh", login: true},
-			{path: "/bin/bash", login: true},
-			{path: "/bin/sh"},
-		}
-	}
-	return []shellSpec{
-		{path: "/bin/bash", login: true},
-		{path: "/bin/sh"},
-	}
+// shellSpec 描述一个候选解释器及其启动参数。
+type shellSpec struct {
+	path string
+	args []string
 }
 
 var (
@@ -122,28 +111,34 @@ func (s *Shell) Execute(ctx context.Context, request ShellRequest) ShellResult {
 	return collect(shellCtx, output, cmd.Run())
 }
 
-// resolveShell 按当前平台优先级返回实际存在的解释器及启动参数；
-// 登录参数只对支持 -l 的 zsh/bash 使用。
+// resolveShell 按当前平台优先级返回实际存在的解释器及启动参数。
 func resolveShell(exists func(string) bool) (string, []string) {
 	return resolveShellFrom(shellCandidates(), exists)
+}
+
+// CommandInterpreter 返回当前平台实际使用的命令解释器路径与启动参数，
+// 供系统提示词向模型说明命令语法。
+func CommandInterpreter() (string, []string) {
+	return resolveShell(shellExists)
 }
 
 // resolveShellFrom 从候选列表中选出第一个存在的解释器；exists 便于测试。
 func resolveShellFrom(candidates []shellSpec, exists func(string) bool) (string, []string) {
 	for _, candidate := range candidates {
-		if !exists(candidate.path) {
-			continue
+		if exists(candidate.path) {
+			return candidate.path, candidate.args
 		}
-		if candidate.login {
-			return candidate.path, []string{loginFlag, stdinFlag}
-		}
-		return candidate.path, []string{stdinFlag}
 	}
-	return fallbackShell, []string{stdinFlag}
+	fallback := fallbackShellSpec()
+	return fallback.path, fallback.args
 }
 
-// shellExists 判断候选解释器是否为可用的普通文件。
+// shellExists 判断候选解释器是否可用：绝对路径检查文件，其余交给 PATH。
 func shellExists(path string) bool {
+	if !filepath.IsAbs(path) {
+		_, err := exec.LookPath(path)
+		return err == nil
+	}
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
 }
@@ -171,12 +166,7 @@ func (s *Shell) script(command string) string {
 	if s.config.PathPrefix == emptyText {
 		return command
 	}
-	return "export PATH=" + quoteForShell(s.config.PathPrefix) + ":$PATH\n" + command
-}
-
-// quoteForShell 用单引号包裹路径，供 shell 安全展开。
-func quoteForShell(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+	return pathPrefixLine(s.config.PathPrefix) + "\n" + command
 }
 
 // timeout 优先使用单条命令的截止时间，否则回退到配置值。

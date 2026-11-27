@@ -26,6 +26,8 @@ var promptFS embed.FS
 const (
 	defaultPromptTemplate = "coding"
 	promptPlaceholder     = "{{workspace}}"
+	platformPlaceholder   = "{{platform}}"
+	shellPlaceholder      = "{{shell}}"
 )
 
 const (
@@ -126,7 +128,7 @@ func (l *DBLoader) loadHistory(
 	return append(history, schema.UserMessage(current.Content)), nil
 }
 
-// renderSystemPrompt 按名称加载模板并注入工作区路径。
+// renderSystemPrompt 按名称加载模板，并注入工作区路径、运行平台与解释器。
 func renderSystemPrompt(name, dir string) (string, error) {
 	if name == "" {
 		name = defaultPromptTemplate
@@ -135,7 +137,12 @@ func renderSystemPrompt(name, dir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load prompt template %q: %w", name, err)
 	}
-	return strings.ReplaceAll(string(data), promptPlaceholder, dir), nil
+	replacer := strings.NewReplacer(
+		promptPlaceholder, dir,
+		platformPlaceholder, platformLabel(),
+		shellPlaceholder, shellLabel(),
+	)
+	return replacer.Replace(string(data)), nil
 }
 
 // displayMessage 把历史消息转换为模型可接受的格式。正文为空的助手消息

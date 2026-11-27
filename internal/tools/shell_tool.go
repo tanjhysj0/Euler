@@ -27,7 +27,7 @@ func (r *Registry) shellTool(
 	executor Executor, dir string, secrets []string,
 ) (tool.BaseTool, error) {
 	set := shellToolset{registry: r, executor: executor, dir: dir, secrets: secrets}
-	return registerTool(r, "shell", "在工作区执行 shell 命令（需用户批准）", set.run)
+	return registerTool(r, "shell", "在工作区执行命令（需用户批准）", set.run)
 }
 
 // run 只准备受审批保护的调用；实际执行发生在审批关卡放行后的 apply 中。
