@@ -41,7 +41,7 @@ jobs:
   macos:
     name: macOS DMG（${{ matrix.arch }}）
     needs: release
-    runs-on: macos-14
+    runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
