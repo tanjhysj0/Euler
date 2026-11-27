@@ -36,3 +36,4 @@
 # 发布与安装包产物
 /dist/
 /packaging/out/
+.vscode
