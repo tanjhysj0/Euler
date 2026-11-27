@@ -205,7 +205,7 @@ func execute(opts options) report {
 	tracer := newTracer(config.LangfuseFromEnv())
 	if tracer != nil {
 		// 进程退出前刷新，确保最后一轮 trace 也上传
-		defer tracer.Flush()
+		defer tracer.Flush(context.Background())
 	}
 	runtime := agent.NewRuntime(agent.Deps{
 		Loader: agent.StaticLoader{Dir: dir, Prompt: opts.prompt,

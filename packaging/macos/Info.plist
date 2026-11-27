@@ -24,10 +24,15 @@
 	<string>0.0.0</string>
 	<key>LSEnvironment</key>
 	<dict>
-		<!-- 由 Finder 双击启动时自动打开浏览器界面 -->
+		<!-- 由 Finder 双击启动时自动打开浏览器界面，并常驻菜单栏图标 -->
 		<key>EULER_OPEN</key>
 		<string>1</string>
+		<key>EULER_TRAY</key>
+		<string>1</string>
 	</dict>
+	<key>LSUIElement</key>
+	<!-- 只显示菜单栏图标，不在 Dock 与程序切换器中留下窗口 -->
+	<true/>
 	<key>LSMinimumSystemVersion</key>
 	<string>12.0</string>
 	<key>NSHighResolutionCapable</key>

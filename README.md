@@ -247,7 +247,9 @@ make build
 .\bin\euler.exe
 ```
 
-启动参数：`-open` 表示启动后用默认浏览器打开界面，`-version` 打印版本号，`-config` 指定配置文件。
+启动参数：`-open` 表示启动后用默认浏览器打开界面，`-tray` 表示常驻系统托盘（macOS 菜单栏 / Windows 通知区域）而不占用终端窗口，`-version` 打印版本号，`-config` 指定配置文件。托盘菜单包含「打开 Web 地址」与「退出」，选择退出会先优雅关闭 HTTP 服务与数据库再结束进程。
+
+`-tray` 目前只在 macOS 与 Windows 生效；Linux 上没有托盘实现，会自动回退为前台运行。
 
 ### 安装包与发布
 
@@ -260,15 +262,17 @@ make build
 | Linux | `.deb` / `.rpm`（含应用菜单入口） | 任意平台，GoReleaser + nfpm |
 | 通用 | `.tar.gz` / `.zip` 归档、`checksums.txt` | 任意平台 |
 
+macOS 的菜单栏托盘依赖 Cocoa（cgo），无法在 Linux 上交叉编译，因此 macOS 归档与 `.dmg` 都在 macOS 任务里本机构建；GoReleaser 只负责 Linux 与 Windows。
+
 ```bash
 make release-snapshot                            # 本地生成归档与 deb/rpm，不上传
 make package-macos                               # 本机生成 DMG；无证书时跳过签名与公证
 make package-windows VERSION=1.2.3 ARCH=amd64    # Windows 本机生成 MSI
 ```
 
-推送 `v*` tag 会触发 `.github/workflows/release.yml`：Ubuntu 上由 GoReleaser 产出归档、deb/rpm 与校验和；macOS 与 Windows 分别生成并签名安装器；最后由独立任务重新汇总全部产物生成 `checksums.txt`，并用 **cosign keyless** 生成 `checksums.txt.sigstore.json`。
+推送 `v*` tag 会触发 `.github/workflows/release.yml`：Ubuntu 上由 GoReleaser 产出 Linux / Windows 归档、deb/rpm 与校验和；macOS 与 Windows 分别本机构建并签名安装器；最后由独立任务重新汇总全部产物生成 `checksums.txt`，并用 **cosign keyless** 生成 `checksums.txt.sigstore.json`。
 
-安装器创建的快捷方式都会附带 `-open` 参数，点击后用默认浏览器打开界面。
+安装器创建的快捷方式都会附带 `-open -tray` 参数：双击后浏览器打开界面，同时出现托盘图标用于确认运行状态与退出；macOS 应用包设置 `LSUIElement`，只在菜单栏显示图标，不占用 Dock 与终端窗口。
 
 代码签名与公证需要在仓库 Secrets 中配置：
 

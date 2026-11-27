@@ -14,6 +14,9 @@ import (
 // envOpenBrowser 是安装包桌面快捷方式使用的变量名：设置后等同于 -open。
 const envOpenBrowser = "EULER_OPEN"
 
+// envTray 由安装包启动器设置：设置后等同于 -tray，不占用终端窗口。
+const envTray = "EULER_TRAY"
+
 // browserCommand 返回指定操作系统下打开 URL 的命令与参数。
 // 抽成纯函数便于测试覆盖三个平台分支。
 func browserCommand(goos, target string) (string, []string) {

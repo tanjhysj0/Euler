@@ -33,7 +33,7 @@
             Name="Euler"
             Description="Euler local agent workspace"
             Target="[INSTALLFOLDER]euler.exe"
-            Arguments="-open"
+            Arguments="-open -tray"
             WorkingDirectory="INSTALLFOLDER"
             Icon="EulerIcon" />
           <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
@@ -55,7 +55,7 @@
           Name="Euler"
           Description="Euler local agent workspace"
           Target="[INSTALLFOLDER]euler.exe"
-          Arguments="-open"
+          Arguments="-open -tray"
           WorkingDirectory="INSTALLFOLDER"
           Icon="EulerIcon" />
         <RegistryValue

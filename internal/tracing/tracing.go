@@ -228,8 +228,10 @@ func RecordBudgetExhausted(ctx context.Context, used, limit int) {
 }
 
 // Flush 在进程退出前强制刷新并关闭导出器，避免丢失最后一批 span。
-func (t *Tracer) Flush() {
-	ctx, cancel := context.WithTimeout(context.Background(), flushTimeout)
+// 传入的 ctx 通常已随退出被取消，这里用 WithoutCancel 保留其取值，
+// 再按独立的刷新预算重新计时。
+func (t *Tracer) Flush(parent context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), flushTimeout)
 	defer cancel()
 	if err := t.provider.Shutdown(ctx); err != nil {
 		slog.Warn("shutdown langfuse tracer", "error", err)

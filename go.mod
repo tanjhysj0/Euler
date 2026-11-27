@@ -3,6 +3,7 @@ module euler
 go 1.26.5
 
 require (
+	fyne.io/systray v1.12.2
 	github.com/cloudwego/eino v0.9.23
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/gin-gonic/gin v1.12.0

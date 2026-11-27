@@ -57,22 +57,47 @@ jobs:
       MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v4
-      - name: 下载对应架构的归档
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # 菜单栏托盘依赖 Cocoa（cgo），无法在 Linux 上交叉编译，必须在 macOS 本机构建。
+      - name: 构建二进制
+        env:
+          CGO_ENABLED: "1"
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          npm --prefix web ci
+          npm --prefix web run build
+          version="${GITHUB_REF_NAME#v}"
+          go build -trimpath -ldflags "-s -w -X main.version=${version}" \
+            -o bin/euler ./cmd/euler
+      - name: 生成归档
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          mkdir -p build
-          gh release download "$GITHUB_REF_NAME" \
-            --pattern "euler_${version}_darwin_${ARCH}.tar.gz" --dir build
-          tar -xzf "build/euler_${version}_darwin_${ARCH}.tar.gz" -C build
+          mkdir -p build/archive
+          cp bin/euler README.md build/archive/
+          tar -czf "build/euler_${version}_darwin_${ARCH}.tar.gz" \
+            -C build/archive euler README.md
       - name: 生成应用包、DMG 并签名公证
         run: |
           set -euo pipefail
           chmod +x packaging/macos/package.sh
-          packaging/macos/package.sh --binary build/euler --arch "$ARCH" \
+          packaging/macos/package.sh --binary bin/euler --arch "$ARCH" \
             --version "$VERSION" --out dist
-      - name: 上传 DMG
-        run: gh release upload "$GITHUB_REF_NAME" dist/*.dmg --clobber
+      - name: 上传归档与 DMG
+        run: |
+          set -euo pipefail
+          gh release upload "$GITHUB_REF_NAME" \
+            "build/euler_${GITHUB_REF_NAME#v}_darwin_${ARCH}.tar.gz" \
+            dist/*.dmg --clobber
 
   windows:
     name: Windows MSI（${{ matrix.arch }}）

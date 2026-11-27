@@ -28,6 +28,7 @@ import (
 	"euler/internal/run"
 	"euler/internal/session"
 	"euler/internal/tracing"
+	"euler/internal/tray"
 	"euler/internal/workspace"
 	"euler/web"
 )
@@ -46,6 +47,7 @@ var version = "dev"
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "配置文件路径")
 	openBrowser := flag.Bool("open", envBool(envOpenBrowser), "启动后自动用浏览器打开界面")
+	useTray := flag.Bool("tray", envBool(envTray), "在系统托盘/菜单栏常驻，不占用终端窗口")
 	showVersion := flag.Bool("version", false, "打印版本号后退出")
 	flag.Parse()
 	if *showVersion {
@@ -54,13 +56,21 @@ func main() {
 		}
 		return
 	}
-	if err := serve(*configPath, *openBrowser); err != nil {
+	if err := serve(*configPath, serveOptions{
+		openBrowser: *openBrowser, useTray: *useTray,
+	}); err != nil {
 		slog.Error("euler startup failed", "error", err)
 		os.Exit(exitFailure)
 	}
 }
 
-func serve(configPath string, openBrowser bool) error {
+// serveOptions 汇总启动阶段的一次性开关，避免布尔参数直接控制分支。
+type serveOptions struct {
+	openBrowser bool
+	useTray     bool
+}
+
+func serve(configPath string, opts serveOptions) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -89,10 +99,16 @@ func serve(configPath string, openBrowser bool) error {
 	}
 	router := registerRoutes(cfg, auth, db, svc)
 	slog.Info("config loaded", "listen", cfg.Listen, "allowed_origins", len(cfg.AllowedOrigins))
-	return serveHTTP(router, svc.runs, svc.tracer, httpServerOptions{
-		listen:      cfg.Listen,
-		openBrowser: openBrowser,
-	})
+	runnable := httpServer{
+		router: router, runs: svc.runs, tracer: svc.tracer,
+		opts: httpServerOptions{listen: cfg.Listen, openBrowser: opts.openBrowser},
+	}
+	// 托盘模式把 HTTP 服务放后台、主 goroutine 交给系统托盘事件循环；
+	// 无托盘实现的平台自动回退到前台运行。
+	if opts.useTray && tray.Supported() {
+		return runnable.runWithTray()
+	}
+	return runnable.runForeground()
 }
 
 // services 在各启动步骤之间承载组装好的领域服务。
@@ -198,33 +214,79 @@ type httpServerOptions struct {
 	openBrowser bool
 }
 
-// serveHTTP 运行服务器直到收到 SIGINT/SIGTERM，然后排空 HTTP 和
-// run manager 再返回，使延迟执行的清理逻辑关闭数据库。
-func serveHTTP(
-	router *gin.Engine, runs *run.Manager, tracer *tracing.Tracer, opts httpServerOptions,
-) error {
+// httpServer 汇总启动 HTTP 服务所需的依赖，便于前台与托盘两种运行方式复用。
+type httpServer struct {
+	router *gin.Engine
+	runs   *run.Manager
+	tracer *tracing.Tracer
+	opts   httpServerOptions
+}
+
+// runForeground 以终端前台方式运行，收到 SIGINT/SIGTERM 后退出。
+func (s httpServer) runForeground() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return s.run(ctx)
+}
+
+// runWithTray 在系统托盘常驻运行：菜单可打开界面或退出进程。
+// macOS 的 Cocoa 事件循环要求托盘占用主 goroutine，因此服务放到后台，
+// 两个方向的退出（托盘菜单 / 系统信号）都通过取消 ctx 统一收尾。
+func (s httpServer) runWithTray() error {
+	target, err := uiURL(s.opts.listen)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	serveErr := make(chan error, serverErrBuffer)
+	go func() { serveErr <- s.run(ctx) }()
+	// 服务结束或收到系统信号时关闭托盘循环；托盘退出菜单则取消 ctx。
+	stopTray := make(chan struct{})
+	failure := make(chan error, serverErrBuffer)
+	go func() {
+		var runErr error
+		select {
+		case <-sigCtx.Done():
+			cancel()
+			runErr = <-serveErr
+		case runErr = <-serveErr:
+		}
+		failure <- runErr
+		close(stopTray)
+	}()
+	tray.Run(tray.Options{
+		URL:    target,
+		OnOpen: func() { openUI(s.opts.listen) },
+		OnQuit: cancel,
+	}, stopTray)
+	return <-failure
+}
+
+// run 启动服务器并阻塞到 ctx 取消或服务出错，随后排空 HTTP 与 run manager。
+func (s httpServer) run(ctx context.Context) error {
 	server := &http.Server{
-		Addr:              opts.listen,
-		Handler:           router,
+		Addr:              s.opts.listen,
+		Handler:           s.router,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 	// 先显式监听，确保端口就绪后再打开浏览器，避免页面先于服务加载。
-	listener, err := net.Listen("tcp", opts.listen)
+	listener, err := net.Listen("tcp", s.opts.listen)
 	if err != nil {
-		return fmt.Errorf("listen on %s: %w", opts.listen, err)
+		return fmt.Errorf("listen on %s: %w", s.opts.listen, err)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	errCh := make(chan error, serverErrBuffer)
 	go func() { errCh <- server.Serve(listener) }()
-	if opts.openBrowser {
-		go openUI(opts.listen)
+	if s.opts.openBrowser {
+		go openUI(s.opts.listen)
 	}
 	select {
 	case err = <-errCh:
 		return wrapServeError(err)
 	case <-ctx.Done():
-		shutdown(server, runs, tracer)
+		shutdown(ctx, server, s.runs, s.tracer)
 		return nil
 	}
 }
@@ -237,20 +299,25 @@ func wrapServeError(err error) error {
 	return fmt.Errorf("serve http: %w", err)
 }
 
-func shutdown(server *http.Server, runs *run.Manager, tracer *tracing.Tracer) {
-	httpCtx, cancelHTTP := context.WithTimeout(context.Background(), shutdownTimeout)
+// shutdown 依次排空 HTTP 服务、run manager 与追踪器。
+// parent 通常已被取消，因此用 WithoutCancel 保留其取值后重新计时。
+func shutdown(
+	parent context.Context, server *http.Server, runs *run.Manager, tracer *tracing.Tracer,
+) {
+	base := context.WithoutCancel(parent)
+	httpCtx, cancelHTTP := context.WithTimeout(base, shutdownTimeout)
 	defer cancelHTTP()
 	if err := server.Shutdown(httpCtx); err != nil {
 		slog.Warn("shutdown http server", logKeyError, err)
 	}
-	runCtx, cancelRuns := context.WithTimeout(context.Background(), shutdownTimeout)
+	runCtx, cancelRuns := context.WithTimeout(base, shutdownTimeout)
 	defer cancelRuns()
 	if err := runs.Shutdown(runCtx); err != nil {
 		slog.Warn("shutdown run manager", logKeyError, err)
 	}
 	if tracer != nil {
 		// run 结束后再刷新，确保最后一次 run 的 trace 也能上传
-		tracer.Flush()
+		tracer.Flush(base)
 	}
 }
 
