@@ -233,7 +233,7 @@ Windows 下把 `.sh` 换成 `scripts\dev.cmd`、`scripts\build.cmd` 即可。
 
 ### 生产构建
 
-生产构建会把前端产物嵌入 Go 二进制：
+生产构建会把前端产物与数据库迁移脚本嵌入 Go 二进制，单个可执行文件即可运行：
 
 ```bash
 # macOS / Linux

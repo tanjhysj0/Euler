@@ -1,28 +1,32 @@
 package persistence
 
 import (
-	"os"
+	"io/fs"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"euler/migrations"
 )
 
-func TestMigrationsDirPrefersWorkingDirectory(t *testing.T) {
-	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "migrations", "sqlite"), 0o755))
-	t.Chdir(root)
-	dir, err := migrationsDir("migrations/sqlite")
+func TestEmbeddedMigrationsAvailable(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "postgres"} {
+		entries, err := fs.ReadDir(migrations.FS(), dialect)
+		require.NoError(t, err, "dialect=%s", dialect)
+		require.NotEmpty(t, entries, "dialect=%s", dialect)
+	}
+	content, err := fs.ReadFile(migrations.FS(), "sqlite/000001_init.up.sql")
 	require.NoError(t, err)
-	want, err := filepath.EvalSymlinks(filepath.Join(root, "migrations", "sqlite"))
-	require.NoError(t, err)
-	got, err := filepath.EvalSymlinks(dir)
-	require.NoError(t, err)
-	require.Equal(t, want, got)
+	require.Contains(t, string(content), "CREATE TABLE")
 }
 
-func TestMigrationsDirMissingReturnsError(t *testing.T) {
+// TestMigrateUsesEmbeddedScriptsOutsideRepo 模拟安装后的运行环境：
+// 工作目录没有 migrations/ 目录时，迁移仍应依赖内嵌脚本完成。
+func TestMigrateUsesEmbeddedScriptsOutsideRepo(t *testing.T) {
 	t.Chdir(t.TempDir())
-	_, err := migrationsDir("migrations/nonexistent")
-	require.Error(t, err)
+	dbPath := filepath.Join(t.TempDir(), "euler.db")
+	require.NoError(t, Migrate("sqlite", dbPath))
+	// 重复执行应幂等，不会重复建表或报错。
+	require.NoError(t, Migrate("sqlite", dbPath))
 }

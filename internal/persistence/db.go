@@ -6,16 +6,19 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
-	"os"
-	"path/filepath"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+
+	"euler/migrations"
 )
 
 const (
@@ -88,9 +91,10 @@ func openMigrateDB(dialect Dialect, databaseURL string) (*sql.DB, error) {
 	return sqlDB, nil
 }
 
-// Migrate 应用方言迁移目录中所有待执行的 up 迁移。
+// Migrate 应用内嵌迁移脚本中所有待执行的 up 迁移。
 // 每个迁移文件在独立事务中执行，并在 schema_migrations 表中记录
 // 已应用版本号，保证幂等可重复执行。driverName 为空时自动从 URL 推断。
+// 迁移脚本通过 go:embed 内嵌，与工作目录无关。
 func Migrate(driverName, databaseURL string) error {
 	if driverName == "" {
 		driverName = InferDriver(databaseURL)
@@ -99,15 +103,11 @@ func Migrate(driverName, databaseURL string) error {
 	if err != nil {
 		return err
 	}
-	dir, err := migrationsDir(dialect.MigrationsDir())
+	dir := strings.TrimPrefix(dialect.MigrationsDir(), "migrations/")
+	names, err := embeddedMigrationNames(dialect.MigrationsDir())
 	if err != nil {
-		return fmt.Errorf("locate migrations: %w", err)
+		return err
 	}
-	matches, err := filepath.Glob(filepath.Join(dir, "*.up.sql"))
-	if err != nil {
-		return fmt.Errorf("glob migrations: %w", err)
-	}
-	slices.Sort(matches)
 
 	sqlDB, err := openMigrateDB(dialect, databaseURL)
 	if err != nil {
@@ -124,18 +124,36 @@ func Migrate(driverName, databaseURL string) error {
 		return err
 	}
 
-	for _, path := range matches {
-		if err := processMigration(ctx, sqlDB, path); err != nil {
+	for _, name := range names {
+		if err := processMigration(ctx, sqlDB, dir, name); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// embeddedMigrationNames 列出内嵌迁移目录中的 up 脚本文件名，按文件名升序。
+func embeddedMigrationNames(dialectDir string) ([]string, error) {
+	dir := strings.TrimPrefix(dialectDir, "migrations/")
+	entries, err := fs.ReadDir(migrations.FS(), dir)
+	if err != nil {
+		return nil, fmt.Errorf("locate migrations: %w", err)
+	}
+	names := make([]string, len(entries))
+	for i, entry := range entries {
+		names[i] = entry.Name()
+	}
+	names = slices.DeleteFunc(names, func(name string) bool {
+		return !strings.HasSuffix(name, ".up.sql")
+	})
+	slices.Sort(names)
+	return names, nil
+}
+
 // processMigration 解析单个迁移文件的版本号，若尚未应用则读取并执行。
 // 文件名不匹配迁移命名规则时静默跳过。
-func processMigration(ctx context.Context, sqlDB *sql.DB, path string) error {
-	version, ok := migrationVersion(filepath.Base(path))
+func processMigration(ctx context.Context, sqlDB *sql.DB, dir, name string) error {
+	version, ok := migrationVersion(name)
 	if !ok {
 		return nil
 	}
@@ -146,7 +164,7 @@ func processMigration(ctx context.Context, sqlDB *sql.DB, path string) error {
 	if applied {
 		return nil
 	}
-	mf, err := readMigrationFile(path, version)
+	mf, err := readMigrationFile(dir, name, version)
 	if err != nil {
 		return err
 	}
@@ -192,13 +210,13 @@ type migrationFile struct {
 	content []byte
 }
 
-// readMigrationFile 读取迁移文件内容并封装为 migrationFile。
-func readMigrationFile(path string, version int) (migrationFile, error) {
-	content, err := os.ReadFile(path)
+// readMigrationFile 从内嵌文件系统读取迁移内容并封装为 migrationFile。
+func readMigrationFile(dir, name string, version int) (migrationFile, error) {
+	content, err := fs.ReadFile(migrations.FS(), path.Join(dir, name))
 	if err != nil {
 		return migrationFile{}, fmt.Errorf("read migration %d: %w", version, err)
 	}
-	return migrationFile{version: version, name: filepath.Base(path), content: content}, nil
+	return migrationFile{version: version, name: name, content: content}, nil
 }
 
 // applyMigration 在单个事务中执行一个迁移文件，并记录版本号。
@@ -237,28 +255,6 @@ func migrationVersion(name string) (int, bool) {
 	}
 	v, err := strconv.Atoi(m[1])
 	return v, err == nil
-}
-
-// migrationsDir 定位方言迁移目录：先查找工作目录（仓库检出和测试场景），
-// 再查找正在运行的可执行文件旁边或其上级目录，使安装后的二进制也能找到。
-func migrationsDir(dialectDir string) (string, error) {
-	candidates := []string{dialectDir}
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		candidates = append(candidates,
-			filepath.Join(exeDir, dialectDir),
-			filepath.Join(exeDir, "..", dialectDir))
-	}
-	for _, candidate := range candidates {
-		abs, err := filepath.Abs(candidate)
-		if err != nil {
-			continue
-		}
-		if info, statErr := os.Stat(abs); statErr == nil && info.IsDir() {
-			return abs, nil
-		}
-	}
-	return "", errors.New("migrations directory not found: " + dialectDir)
 }
 
 // HealthChecker 将 GORM 连接适配到 API 健康检查端点。
