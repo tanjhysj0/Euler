@@ -88,18 +88,23 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 
 - Go 1.26+
 - Node.js 20+
-- GNU Make
+
+`make` 只是便捷入口，不是必需项：macOS / Linux 可直接运行 `scripts/*.sh`，原生 Windows 可直接运行 `scripts\*.cmd`（`dev.cmd` 依赖 Windows PowerShell 5+）。
 
 **开发检查（可选）**：
 
 - `golangci-lint`（`make lint`、提交前检查）
 - Docker 24+（仅 Harbor 评测运行需要，含 compose v2 插件；日常开发默认 SQLite 单文件，无需 docker）
+- Python 3.9+（仅 Harbor 任务清单校验与下载需要）
+- GNU Make（可选，提供 `make` 别名）
 
 **平台备注**：
 
 `make` 的构建与开发入口由脚本实现：macOS / Linux 使用 `scripts/*.sh`；原生 Windows 下 Make 选择对应的 `scripts\*.cmd`，其中 `dev.cmd` 调用 PowerShell（Windows PowerShell 5+），具体逻辑位于 `scripts/dev.ps1`。也可以不使用 Make，直接运行 `scripts\dev.cmd start`、`scripts\dev.cmd stop` 等命令。
 
 启动前若 `EULER_PORT` / `WEB_PORT` 已被本项目遗留的进程占用（例如旧版 `make` 用 `go run` 起的后端），脚本会先停止该进程再启动；若占用者是其他进程，则提示后退出，不会强制结束。
+
+后端与前端的 PID、启动身份与日志保存在用户状态目录：macOS / Linux 为 `~/.local/state/euler/dev`（可用 `EULER_DEV_STATE_DIR` 覆盖），Windows 为 `%LOCALAPPDATA%\Euler\dev`。`make stop` 与 `scripts/dev.sh stop` 只停止该目录中记录的本项目进程，不会按端口杀进程。
 
 ### 步骤
 
@@ -213,6 +218,18 @@ make dev-reload
 # 只启动前端开发服务器（127.0.0.1:5173，代理 /api 与 /health 到 8080，热更新）
 make dev-web
 ```
+
+不使用 Make 时，脚本提供同样的入口：
+
+```bash
+./scripts/dev.sh start        # 等价 make start
+./scripts/dev.sh stop         # 等价 make stop
+./scripts/dev.sh restart-api  # 等价 make dev-restart
+./scripts/dev.sh restart-web  # 等价 make dev-web-restart
+./scripts/build.sh all        # 等价 make build
+```
+
+Windows 下把 `.sh` 换成 `scripts\dev.cmd`、`scripts\build.cmd` 即可。
 
 ### 生产构建
 
@@ -328,6 +345,17 @@ make harbor-check-selected  # 校验三份清单恰好 30 个任务
 make harbor-download        # 补齐缺失任务目录（harbor-test 会自动调用）
 make harbor-clean           # 清理残留评测容器与网络（harbor-test 前后自动调用）
 ```
+
+只跑指定任务可用于快速验证链路，`HARBOR_TASKS` 用空格分隔 `dataset/task`：
+
+```bash
+EULER_MODEL='deepseek-v4-flash' \
+EULER_MODEL_BASE_URL='https://api.deepseek.com' \
+HARBOR_TASKS='humanevalfix/python-1' \
+make harbor-test-run
+```
+
+`harbor-test-run` 会自行清理残留、交叉编译容器内 agent、生成评测配置并在结束后汇总 reward 通过数，不需要手工准备 YAML；`HARBOR_MODE=smoke` 或 `HARBOR_MODE=coding` 可切换到对应的专项脚本。
 
 任务清单位于：
 

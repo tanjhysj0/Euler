@@ -64,12 +64,13 @@ if [ "$mode" != "smoke" ] && [ "$mode" != "coding" ]; then
   fi
 fi
 
+cfg_dir=""
 cfg=""
 cleanup() {
   status=$?
   trap - EXIT
-  if [ -n "$cfg" ]; then
-    rm -f -- "$cfg" || true
+  if [ -n "$cfg_dir" ]; then
+    rm -rf -- "$cfg_dir" || true
   fi
   "$repo_root/harbor_eval/scripts/clean.sh" >/dev/null 2>&1 || true
   exit "$status"
@@ -105,7 +106,10 @@ echo "==> 运行 Harbor"
 run_id=$(date +%Y%m%d-%H%M%S)
 job_name="coding-multi-$run_id"
 results_dir="harbor_eval/results/$run_id"
-cfg=$(mktemp "${TMPDIR:-/tmp}/euler-harbor-multi-XXXXXX")
+# Harbor 按扩展名判断配置格式，因此配置文件必须带 .yaml；
+# mktemp 模板在 macOS 上只能以 X 结尾，所以先建临时目录再拼接文件名。
+cfg_dir=$(mktemp -d "${TMPDIR:-/tmp}/euler-harbor-multi-XXXXXX")
+cfg="$cfg_dir/job.yaml"
 {
   printf 'job_name: %s\n' "$job_name"
   printf 'jobs_dir: harbor_eval/results\n'
