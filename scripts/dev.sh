@@ -218,12 +218,87 @@ port_in_use() {
 	(exec 3<>"/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1
 }
 
-assert_port_free() {
+# 返回监听指定端口的进程 PID；无法确定时输出空字符串。
+listener_pid() {
+	local port="$1"
+	local pid=""
+	if command -v lsof >/dev/null 2>&1; then
+		pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)"
+	elif command -v ss >/dev/null 2>&1; then
+		pid="$(ss -ltnpH "sport = :$port" 2>/dev/null |
+			sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -1 || true)"
+	fi
+	printf '%s' "$pid"
+}
+
+# 只识别本项目遗留的进程：旧版 make 用 go run 启动的后端，或本项目目录下的 Vite。
+is_project_legacy_process() {
+	local pid="$1"
+	local kind="$2"
+	local command_line=""
+	local executable=""
+
+	command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+	if [[ -z "$command_line" ]]; then
+		return 1
+	fi
+	executable="${command_line%% *}"
+	executable="${executable##*/}"
+	case "$kind" in
+	api)
+		[[ "$executable" == "euler" || "$executable" == "euler-dev" ]]
+		;;
+	web)
+		[[ "$command_line" == *vite* && "$command_line" == *"$ROOT_DIR"* ]]
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+# 端口被占用时仅接管本项目遗留进程；其他进程一律提示后退出。
+reclaim_port() {
 	local name="$1"
 	local port="$2"
-	if port_in_use "$port"; then
-		printf '%s启动前检测到端口 %s 已有监听者，未启动新进程\n' "$name" "$port" >&2
+	local kind="$3"
+	local pid=""
+	local deadline
+
+	pid="$(listener_pid "$port")"
+	if [[ -z "$pid" ]]; then
+		printf '%s启动前检测到端口 %s 已有监听者，但无法确定监听进程，未启动新进程\n' \
+			"$name" "$port" >&2
 		return 1
+	fi
+	if ! is_project_legacy_process "$pid" "$kind"; then
+		printf '%s启动前检测到端口 %s 已被其他进程占用（PID %s），未启动新进程\n' \
+			"$name" "$port" "$pid" >&2
+		printf '请先停止该进程，或用 EULER_PORT / WEB_PORT 指定其他端口\n' >&2
+		return 1
+	fi
+	printf '检测到本项目遗留的%s进程（PID %s），先停止以释放端口 %s\n' "$name" "$pid" "$port"
+	if ! terminate_process "$name" "$pid"; then
+		return 1
+	fi
+	deadline=$((SECONDS + 10))
+	while ((SECONDS < deadline)); do
+		if ! port_in_use "$port"; then
+			return 0
+		fi
+		sleep 1
+	done
+	printf '端口 %s 在停止遗留进程后仍被占用，未启动新进程\n' "$port" >&2
+	return 1
+}
+
+# 启动前保证端口可用：未被占用直接通过，本项目遗留进程先接管，其他进程报错。
+ensure_port_available() {
+	local name="$1"
+	local port="$2"
+	local kind="$3"
+	if port_in_use "$port"; then
+		reclaim_port "$name" "$port" "$kind"
 	fi
 }
 
@@ -298,7 +373,7 @@ wait_for_service() {
 }
 
 api() {
-	assert_port_free "后端" "$EULER_PORT"
+	ensure_port_available "后端" "$EULER_PORT" api
 	if [[ -n "$EULER_CONFIG" ]]; then
 		go run ./cmd/euler -config "$EULER_CONFIG"
 	else
@@ -320,7 +395,7 @@ restart_api() {
 		rm -f -- "$temp_binary" || true
 		return 1
 	fi
-	if ! assert_port_free "后端" "$EULER_PORT"; then
+	if ! ensure_port_available "后端" "$EULER_PORT" api; then
 		rm -f -- "$temp_binary" || true
 		return 1
 	fi
@@ -351,7 +426,9 @@ restart_web() {
 	if ! stop_web; then
 		return 1
 	fi
-	assert_port_free "前端" "$WEB_PORT"
+	if ! ensure_port_available "前端" "$WEB_PORT" web; then
+		return 1
+	fi
 	: > "$WEB_LOG"
 	nohup node web/node_modules/vite/bin/vite.js web \
 		--host 127.0.0.1 --port "$WEB_PORT" --strictPort >"$WEB_LOG" 2>&1 &

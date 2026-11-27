@@ -99,6 +99,8 @@ harbor run ──▶ 任务镜像 ──▶ 上传 euler-agent ──▶ 容器�
 
 `make` 的构建与开发入口由脚本实现：macOS / Linux 使用 `scripts/*.sh`；原生 Windows 下 Make 选择对应的 `scripts\*.cmd`，其中 `dev.cmd` 调用 PowerShell（Windows PowerShell 5+），具体逻辑位于 `scripts/dev.ps1`。也可以不使用 Make，直接运行 `scripts\dev.cmd start`、`scripts\dev.cmd stop` 等命令。
 
+启动前若 `EULER_PORT` / `WEB_PORT` 已被本项目遗留的进程占用（例如旧版 `make` 用 `go run` 起的后端），脚本会先停止该进程再启动；若占用者是其他进程，则提示后退出，不会强制结束。
+
 ### 步骤
 
 **1. 启动服务**

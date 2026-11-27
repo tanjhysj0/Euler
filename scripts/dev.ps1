@@ -263,15 +263,93 @@ function Stop-DevAll {
     }
 }
 
-function Assert-PortFree {
+function Test-PortInUse {
+    param([int]$PortNumber)
+    $listener = Get-NetTCPConnection -State Listen -LocalPort $PortNumber -ErrorAction SilentlyContinue
+    return ($null -ne $listener)
+}
+
+function Get-PortListenerProcessId {
+    # 返回监听指定端口的进程 ID；无法确定时返回 0。
+    param([int]$PortNumber)
+    $listener = Get-NetTCPConnection -State Listen -LocalPort $PortNumber -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -eq $listener) {
+        return 0
+    }
+    return [int]$listener.OwningProcess
+}
+
+function Test-ProjectLegacyProcess {
+    # 只识别本项目遗留的进程：旧版 make 用 go run 启动的后端，或本项目目录下的 Vite。
+    param(
+        [int]$ProcessId,
+        [string]$Kind
+    )
+    $info = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+    if ($null -eq $info) {
+        return $false
+    }
+    $commandLine = [string]$info.CommandLine
+    if ([string]::IsNullOrEmpty($commandLine)) {
+        return $false
+    }
+    $executable = ''
+    if (-not [string]::IsNullOrEmpty($info.ExecutablePath)) {
+        $executable = [System.IO.Path]::GetFileNameWithoutExtension([string]$info.ExecutablePath)
+    }
+    switch ($Kind) {
+        'api' {
+            return ($executable -eq 'euler' -or $executable -eq 'euler-dev')
+        }
+        'web' {
+            $containsVite = $commandLine.IndexOf('vite', [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            $containsRoot = $commandLine.IndexOf($script:RootDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            return ($containsVite -and $containsRoot)
+        }
+        default {
+            return $false
+        }
+    }
+}
+
+function Invoke-PortReclaim {
+    # 端口被占用时仅接管本项目遗留进程；其他进程一律提示后失败。
     param(
         [string]$Name,
-        [string]$Port
+        [int]$PortNumber,
+        [string]$Kind
+    )
+    $listenerPid = Get-PortListenerProcessId -PortNumber $PortNumber
+    if ($listenerPid -le 0) {
+        throw "${Name}启动前检测到端口 $PortNumber 已有监听者，但无法确定监听进程，未启动新进程"
+    }
+    if (-not (Test-ProjectLegacyProcess -ProcessId $listenerPid -Kind $Kind)) {
+        [Console]::Error.WriteLine("${Name}启动前检测到端口 $PortNumber 已被其他进程占用（PID $listenerPid），未启动新进程")
+        [Console]::Error.WriteLine('请先停止该进程，或用 EULER_PORT / WEB_PORT 指定其他端口')
+        throw "${Name}启动被端口 $PortNumber 上的其他进程阻止"
+    }
+    Write-Host "检测到本项目遗留的${Name}进程（PID $listenerPid），先停止以释放端口 $PortNumber"
+    Invoke-ProcessTermination -Name $Name -ProcessId $listenerPid
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        if (-not (Test-PortInUse -PortNumber $PortNumber)) {
+            return
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "端口 $PortNumber 在停止遗留进程后仍被占用，未启动新进程"
+}
+
+function Ensure-PortAvailable {
+    # 启动前保证端口可用：未被占用直接通过，本项目遗留进程先接管，其他进程报错。
+    param(
+        [string]$Name,
+        [string]$Port,
+        [string]$Kind
     )
     $portNumber = [int]$Port
-    $listener = Get-NetTCPConnection -State Listen -LocalPort $portNumber -ErrorAction SilentlyContinue
-    if ($null -ne $listener) {
-        throw "${Name}启动前检测到端口 $Port 已有监听者，未启动新进程"
+    if (Test-PortInUse -PortNumber $portNumber) {
+        Invoke-PortReclaim -Name $Name -PortNumber $portNumber -Kind $Kind
     }
 }
 
@@ -378,7 +456,7 @@ function Wait-DevService {
 }
 
 function Invoke-DevApi {
-    Assert-PortFree -Name '后端' -Port $script:EulerPort
+    Ensure-PortAvailable -Name '后端' -Port $script:EulerPort -Kind 'api'
     $arguments = @('run', './cmd/euler')
     if (-not [string]::IsNullOrEmpty($script:EulerConfig)) {
         $arguments += @('-config', $script:EulerConfig)
@@ -400,7 +478,7 @@ function Restart-DevApi {
     }
     try {
         Stop-DevApi
-        Assert-PortFree -Name '后端' -Port $script:EulerPort
+        Ensure-PortAvailable -Name '后端' -Port $script:EulerPort -Kind 'api'
         Move-Item -LiteralPath $tempBinary -Destination $script:ApiBinary -Force -ErrorAction Stop
     } catch {
         if (Test-Path -LiteralPath $tempBinary -PathType Leaf) {
@@ -440,7 +518,7 @@ function Restart-DevApi {
 
 function Restart-DevWeb {
     Stop-DevWeb
-    Assert-PortFree -Name '前端' -Port $script:WebPort
+    Ensure-PortAvailable -Name '前端' -Port $script:WebPort -Kind 'web'
     New-Item -ItemType Directory -Path $script:StateDir -Force | Out-Null
     $nodePath = (Get-Command node -CommandType Application -ErrorAction Stop).Source
     $webRoot = Join-Path $script:RootDir 'web'
